@@ -21,9 +21,8 @@ from pathlib import Path
 import anthropic
 
 SKILL_DIR = Path(__file__).parent.parent
-# Support both local dev (references/) and deployed bundle (knowledge/)
-_REF_DIR = SKILL_DIR / "knowledge" if (SKILL_DIR / "knowledge").exists() else SKILL_DIR / "references"
 SKILLS_ROOT = Path.home() / ".claude" / "skills"
+_REF_DIR = SKILL_DIR / "knowledge" if (SKILL_DIR / "knowledge").exists() else SKILL_DIR / "references"
 
 
 def read_knowledge_base():
@@ -72,6 +71,13 @@ the top source for new patterns before proceeding.
 
 [Explain *why* behind every major instruction. Use imperative form.
 Keep under 400 lines. Reference notes.md if supplemental detail is needed.]
+
+## Security Checklist
+[REQUIRED for any skill that produces, reviews, or deploys code.
+Include domain-specific checks from the OWASP Top 10 and the security
+best practices in the knowledge base. Format as a checkbox list the user
+can run through before shipping. Omit only for purely non-code skills
+like writing or research.]
 ```
 
 ---

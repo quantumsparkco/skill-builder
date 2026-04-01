@@ -112,6 +112,20 @@ Each source has a key (used when selecting domain-relevant sources), a URL, upda
 
 ---
 
+## Security
+
+| Key | Source | URL | Frequency | Tags |
+|-----|--------|-----|-----------|------|
+| `owasp-top10` | OWASP Top 10 | https://owasp.org/www-project-top-ten/ | Annual | security, web, vulnerabilities |
+| `owasp-cheatsheets` | OWASP Cheat Sheet Series | https://cheatsheetseries.owasp.org | Monthly | security, cheatsheets, code |
+| `snyk-learn` | Snyk Learn (vulnerability patterns) | https://learn.snyk.io | Weekly | security, code, vulnerabilities |
+| `cwe-top25` | CWE Top 25 Most Dangerous Software Weaknesses | https://cwe.mitre.org/top25/archive/2024/2024_cwe_top25.html | Annual | security, weaknesses, code |
+| `github-security-guides` | GitHub Security Best Practices | https://docs.github.com/en/code-security | Monthly | security, github, secrets |
+| `nodejs-security` | Node.js Security Best Practices | https://nodejs.org/en/docs/guides/security | Monthly | security, nodejs, backend |
+| `awesome-security` | Awesome Security (curated) | https://github.com/sbilly/awesome-security | Monthly | security, curated, broad |
+
+---
+
 ## Domain Tag Reference
 
 When selecting sources to embed in a generated skill, use these tags to match:
@@ -121,8 +135,10 @@ When selecting sources to embed in a generated skill, use these tags to match:
 | General / Claude skills | `anthropic-skills`, `anthropic-cookbooks`, `dair-prompt-guide`, `lil-log` |
 | Agents / orchestration | `ms-autogen`, `ms-multiagent-arch`, `agentic-patterns`, `volt-agent-papers` |
 | Prompting / optimization | `dspy`, `instructor`, `prompt-report-paper`, `nir-prompt-eng` |
-| Code generation | `swe-agent`, `anthropic-cookbooks`, `openai-cookbook-web` |
+| Code generation | `swe-agent`, `anthropic-cookbooks`, `openai-cookbook-web`, `owasp-cheatsheets`, `snyk-learn` |
 | Data / analysis | `data-expert-handbook`, `instructor`, `dspy` |
 | Research synthesis | `lil-log`, `ahead-of-ai`, `volt-agent-papers` |
-| Frontend / design | `anthropic-skills-frontend`, `anthropic-cookbooks` |
+| Frontend / design | `anthropic-skills-frontend`, `anthropic-cookbooks`, `owasp-top10`, `owasp-cheatsheets` |
 | Evaluation | `deepeval`, `openai-evals`, `dair-prompt-guide` |
+| Security | `owasp-top10`, `owasp-cheatsheets`, `snyk-learn`, `cwe-top25`, `github-security-guides` |
+| Backend / API | `owasp-top10`, `owasp-cheatsheets`, `snyk-learn`, `nodejs-security` |

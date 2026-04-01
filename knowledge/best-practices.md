@@ -94,6 +94,68 @@ An assertion that always passes regardless of skill quality doesn't measure anyt
 
 ---
 
+## Security — Non-Negotiable Requirements for All Code Skills
+
+Every skill that produces, reviews, or deploys code MUST include a Security section. This is not optional. Vibe-coded apps are a primary attack surface — the skill is the last line of defense before code ships.
+
+### The OWASP Top 10 — always check these in any web/API skill
+
+1. **Broken Access Control** — never trust client-supplied roles/IDs; verify server-side
+2. **Cryptographic Failures** — never store plaintext secrets; use env vars, never hardcode keys
+3. **Injection** (SQL, command, XSS) — always use parameterized queries; never interpolate user input into queries or shell commands
+4. **Insecure Design** — threat model before building; assume hostile input at every boundary
+5. **Security Misconfiguration** — disable debug mode in prod; remove default credentials; set security headers
+6. **Vulnerable Components** — pin dependency versions; check `npm audit` / `pip-audit` before shipping
+7. **Auth & Session Failures** — use established auth libraries (never roll your own); set secure/httpOnly cookie flags
+8. **Integrity Failures** — verify package integrity; don't execute code from untrusted CDNs without SRI hashes
+9. **Logging Failures** — log auth events and failures; never log passwords or tokens
+10. **SSRF** — validate and restrict URLs before making server-side requests
+
+### Security section template for generated skills
+
+Every skill that touches code must include this section:
+
+```markdown
+## Security Checklist
+
+Before shipping any code produced by this skill, verify:
+
+- [ ] No secrets, API keys, or passwords in code or version control — use env vars
+- [ ] All user input is validated and sanitized before use
+- [ ] Database queries use parameterized statements, never string interpolation
+- [ ] Dependencies are pinned and checked with `npm audit` or `pip-audit`
+- [ ] Auth/session handling uses a trusted library, not custom implementation
+- [ ] Error messages don't leak stack traces or internal paths to users
+- [ ] Security headers set (CSP, X-Frame-Options, HSTS for HTTPS apps)
+- [ ] [domain-specific check — e.g., for APIs: rate limiting enabled]
+
+Consult `references/sources.md` → security sources for current vulnerability patterns.
+```
+
+### Domain-specific security rules
+
+**Frontend/React/JS:**
+- Always sanitize before `dangerouslySetInnerHTML`; prefer React's built-in escaping
+- Use Content Security Policy headers
+- Load third-party scripts with Subresource Integrity (SRI) hashes
+
+**Backend/API:**
+- Rate limit all auth endpoints
+- Use HTTPS everywhere; redirect HTTP → HTTPS
+- Validate Content-Type on all POST/PUT endpoints
+
+**Database:**
+- Parameterized queries always — no exceptions
+- Principle of least privilege on DB user permissions
+- Never expose DB connection strings in client-side code
+
+**Authentication:**
+- Use established libraries (NextAuth, Passport, Supabase Auth)
+- Bcrypt/argon2 for password hashing — never MD5/SHA1
+- Short-lived JWTs with refresh token rotation
+
+---
+
 ## What to Monitor Going Forward
 
 The following sources are most likely to produce actionable updates:
