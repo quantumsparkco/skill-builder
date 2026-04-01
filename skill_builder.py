@@ -68,7 +68,7 @@ Examples:
     )
 
     parser.add_argument("source", nargs="?", help="YouTube URL, website URL, or file path")
-    parser.add_argument("--max-videos", type=int, default=50, metavar="N",
+    parser.add_argument("--max-videos", type=int, default=200, metavar="N",
                         help="Max videos from a playlist or channel (default: 50)")
     parser.add_argument("--list", dest="list_only", action="store_true",
                         help="List videos in a playlist/channel without processing")
