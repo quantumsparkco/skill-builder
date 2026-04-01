@@ -152,6 +152,7 @@ def run_build(job_id, sources, max_videos, raw_text):
 
 def _finalize_skill(job_id, skill_result, q):
     """Save skill to disk, build zip, mark done."""
+    from generate_skill import save_skill
     tmpdir = Path(tempfile.mkdtemp())
     skill_dir = save_skill(skill_result, tmpdir)
 
@@ -171,12 +172,6 @@ def _finalize_skill(job_id, skill_result, q):
 
     q = jobs[job_id]["queue"]
     q.put({"type": "complete", "skill_name": skill_result["skill_name"]})
-
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = str(e)
-        log(f"Error: {e}", "error")
-        q.put({"type": "complete", "skill_name": None})
 
 
 # ──────────────────────────────────────────────
