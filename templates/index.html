@@ -465,9 +465,15 @@
 
   <!-- Progress Card -->
   <div class="card" id="progress-card" style="padding:22px;margin-bottom:14px;display:none;">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-      <div class="spinner" id="progress-spinner"></div>
-      <h2 id="progress-title" style="font-size:15px;font-weight:600;letter-spacing:-0.02em;">Building skill...</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="spinner" id="progress-spinner"></div>
+        <h2 id="progress-title" style="font-size:15px;font-weight:600;letter-spacing:-0.02em;">Building skill...</h2>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+        <span id="elapsed-timer" style="font-family:var(--font-mono);font-size:12px;color:var(--text-3);">0:00</span>
+        <span id="eta-label" style="font-size:11px;color:var(--text-3);display:none;"></span>
+      </div>
     </div>
     <div id="log-container"></div>
   </div>
@@ -642,6 +648,47 @@ let files = [];   // [{name, content}]
 let currentJobId = null;
 let currentMode  = 'skill'; // 'skill' | 'persona'
 
+// ── Timer ──────────────────────────────────────────────────
+let timerInterval  = null;
+let timerStart     = null;
+let fetchTimes     = []; // ms per source, for ETA estimation
+
+function startTimer() {
+  timerStart = Date.now();
+  fetchTimes = [];
+  document.getElementById('eta-label').style.display = 'none';
+  document.getElementById('elapsed-timer').textContent = '0:00';
+  timerInterval = setInterval(() => {
+    const secs = Math.floor((Date.now() - timerStart) / 1000);
+    const m = Math.floor(secs / 60);
+    const s = String(secs % 60).padStart(2, '0');
+    document.getElementById('elapsed-timer').textContent = `${m}:${s}`;
+  }, 1000);
+}
+
+function stopTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+}
+
+function recordFetch() {
+  // Called each time a source finishes — used to build ETA
+  if (!timerStart) return;
+  fetchTimes.push(Date.now() - timerStart);
+  const totalSources = urls.length + (files.length > 0 ? 1 : 0) +
+    (document.getElementById('paste-input').value.trim() ? 1 : 0);
+  if (fetchTimes.length >= 1 && totalSources > fetchTimes.length) {
+    const avgMs = fetchTimes[fetchTimes.length - 1] / fetchTimes.length;
+    const remaining = totalSources - fetchTimes.length;
+    // Add ~25s for Claude generation
+    const etaSecs = Math.round((avgMs * remaining) / 1000) + 25;
+    const m = Math.floor(etaSecs / 60);
+    const s = String(etaSecs % 60).padStart(2, '0');
+    const etaEl = document.getElementById('eta-label');
+    etaEl.textContent = `~${m}:${s} remaining`;
+    etaEl.style.display = 'block';
+  }
+}
+
 // ── Mode switching ─────────────────────────────────────────
 function switchMode(mode) {
   currentMode = mode;
@@ -801,6 +848,7 @@ async function startBuild() {
     currentMode === 'persona' ? 'Building persona...' : 'Building skill...';
   document.getElementById('build-btn').disabled = true;
   document.getElementById('stop-btn').style.display = 'inline-flex';
+  startTimer();
 
   const endpoint = currentMode === 'persona' ? '/build-persona' : '/build';
 
@@ -831,6 +879,7 @@ async function stopBuild() {
   if (currentJobId) {
     await fetch('/cancel/' + currentJobId, { method: 'POST' });
   }
+  stopTimer();
   document.getElementById('progress-spinner').style.display = 'none';
   document.getElementById('progress-title').textContent = 'Stopped';
   addLog('Build stopped by user.', 'error');
@@ -838,8 +887,10 @@ async function stopBuild() {
 }
 
 function resetBuildUI() {
+  stopTimer();
   document.getElementById('build-btn').disabled = false;
   document.getElementById('stop-btn').style.display = 'none';
+  document.getElementById('eta-label').style.display = 'none';
 }
 
 function streamProgress(jobId) {
@@ -878,6 +929,8 @@ function addLog(message, kind) {
   row.innerHTML = `<div class="log-dot ${dotClass}"></div><span style="font-size:13px;color:${color};">${message}</span>`;
   container.appendChild(row);
   container.scrollTop = container.scrollHeight;
+  // Update ETA after each successful fetch
+  if (kind === 'success' && /^Got:/.test(message)) recordFetch();
 }
 
 async function loadResult(jobId) {
