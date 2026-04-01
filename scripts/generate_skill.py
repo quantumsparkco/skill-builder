@@ -78,6 +78,23 @@ Include domain-specific checks from the OWASP Top 10 and the security
 best practices in the knowledge base. Format as a checkbox list the user
 can run through before shipping. Omit only for purely non-code skills
 like writing or research.]
+
+## Verification
+[REQUIRED in every skill. Define exactly how Claude should check its own
+work after completing a task. This creates a self-correction loop:
+execute → verify → fix → re-verify until passing (max 3 iterations).
+
+The verification method must be domain-appropriate:
+- Code skills: run tests, linter, security scan, check output against requirements
+- API skills: make a real test request, check response shape and status
+- Data skills: validate schema, check for nulls/types, spot-check values
+- Content skills: review against the stated criteria, check word count/format
+- Design skills: screenshot and compare against reference
+
+Format as numbered steps Claude executes after completing the main task.
+Always end with: "If any check fails, fix it and re-run verification.
+Repeat up to 3 times. If still failing after 3 attempts, surface the
+specific failure to the user with a clear description of what's wrong."]
 ```
 
 ---

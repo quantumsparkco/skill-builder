@@ -94,6 +94,43 @@ An assertion that always passes regardless of skill quality doesn't measure anyt
 
 ---
 
+## Self-Verification Loop — Required in Every Skill
+
+Every skill must define how Claude checks its own work. The design skill does this with screenshots — the same principle applies everywhere. This is what separates a skill that ships working output from one that just generates plausible-looking output.
+
+### The loop
+
+```
+execute task → run verification steps → if fail: fix and re-run → max 3 iterations
+```
+
+After 3 failed iterations, stop and surface the specific failure to the user. Never silently ship broken output.
+
+### Verification methods by domain
+
+| Domain | How to verify |
+|--------|--------------|
+| **Frontend / UI** | Screenshot the rendered output, compare against requirements. Check for console errors. Verify responsive at 375px and 1280px. |
+| **Backend / API** | Make a real HTTP request to each endpoint. Check status codes, response shape, and error handling. |
+| **Code (general)** | Run the code. If tests exist, run them. Run a linter. Check output matches stated requirements. |
+| **Security** | Run `npm audit` or `pip-audit`. Check for hardcoded secrets with a grep. Verify no debug/verbose errors in prod mode. |
+| **Data / analysis** | Validate output schema. Check for unexpected nulls, type mismatches, or truncation. Spot-check 3-5 rows against source. |
+| **Content / writing** | Re-read against the original requirements. Check word count, format, tone. Verify all requested sections are present. |
+| **Deployment** | Hit the deployed URL, verify response. Check logs for errors. Confirm env vars loaded correctly. |
+
+### What to include in each skill's Verification section
+
+1. The specific command or action to check the output (e.g., `npm test`, `curl`, screenshot)
+2. What a passing result looks like
+3. What a failing result looks like and the most common fix
+4. The 3-iteration cap with explicit instruction to surface failures to the user
+
+### Why this matters
+
+Without verification, Claude produces output it believes is correct but hasn't confirmed. The verification loop catches the 20% of cases where the first attempt has a subtle bug, wrong format, or missed requirement — before the user ever sees it.
+
+---
+
 ## Security — Non-Negotiable Requirements for All Code Skills
 
 Every skill that produces, reviews, or deploys code MUST include a Security section. This is not optional. Vibe-coded apps are a primary attack surface — the skill is the last line of defense before code ships.
