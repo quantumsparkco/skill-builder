@@ -365,8 +365,20 @@
     ">⚡</div>
     <div>
       <h1 style="font-family:var(--font-head);font-size:22px;font-weight:700;letter-spacing:-0.04em;line-height:1.1;">Skill Builder</h1>
-      <p style="font-size:12.5px;color:var(--text-2);margin-top:2px;">Turn any tutorial into a Claude Code skill</p>
+      <p style="font-size:12.5px;color:var(--text-2);margin-top:2px;">Turn any content into a Claude Code skill or persona file</p>
     </div>
+  </div>
+
+  <!-- Mode switcher -->
+  <div style="display:flex;gap:6px;margin-bottom:18px;">
+    <button id="mode-skill-btn" onclick="switchMode('skill')"
+      style="font-family:var(--font-body);font-size:13px;font-weight:600;padding:8px 18px;border-radius:9px;border:1px solid var(--brand-500);background:rgba(107,79,232,0.18);color:var(--brand-300);cursor:pointer;transition:all 0.15s;">
+      ⚡ Skill Builder
+    </button>
+    <button id="mode-persona-btn" onclick="switchMode('persona')"
+      style="font-family:var(--font-body);font-size:13px;font-weight:600;padding:8px 18px;border-radius:9px;border:1px solid var(--border);background:transparent;color:var(--text-2);cursor:pointer;transition:all 0.15s;">
+      🎭 Persona Builder
+    </button>
   </div>
 
   <!-- Input Card -->
@@ -421,7 +433,7 @@
   <!-- Options + Build -->
   <div class="card" style="padding:16px 22px;margin-bottom:14px;">
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
-      <div style="display:flex;align-items:center;gap:10px;">
+      <div id="max-videos-wrap" style="display:flex;align-items:center;gap:10px;">
         <span class="field-label" style="margin:0;white-space:nowrap;">Max videos</span>
         <input type="number" id="max-videos" value="200" min="1" max="1000"
           style="width:68px;text-align:center;padding:7px;" />
@@ -546,6 +558,72 @@
     </div>
   </div>
 
+  <!-- Persona Output Card -->
+  <div class="card fade-in" id="persona-output-card" style="padding:22px;display:none;">
+    <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:18px;">
+      <div style="
+        width:38px;height:38px;flex-shrink:0;
+        background:rgba(249,199,79,0.12);
+        border:1px solid rgba(249,199,79,0.25);
+        border-radius:10px;
+        display:flex;align-items:center;justify-content:center;font-size:18px;">🎭</div>
+      <div>
+        <h2 id="persona-output-title" style="font-size:16px;font-weight:700;letter-spacing:-0.03em;line-height:1.2;"></h2>
+        <p id="persona-output-summary" style="font-size:12.5px;color:var(--text-2);margin-top:3px;line-height:1.5;"></p>
+      </div>
+    </div>
+
+    <hr style="margin-bottom:16px;">
+
+    <!-- Topics -->
+    <div id="persona-topics-wrap" style="display:none;margin-bottom:16px;">
+      <span class="field-label">Topics covered</span>
+      <div id="persona-topics" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
+    </div>
+
+    <!-- Download row -->
+    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:18px;">
+      <button class="btn-ghost" onclick="downloadPersona()">⬇ Download Persona File</button>
+    </div>
+
+    <!-- Preview -->
+    <div class="code-block" id="persona-preview"></div>
+
+    <hr style="margin:20px 0;">
+
+    <!-- What to do next -->
+    <div>
+      <h3 style="font-family:var(--font-head);font-size:11px;font-weight:600;letter-spacing:0.06em;color:var(--text-2);text-transform:uppercase;margin-bottom:12px;">What to do next</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:22px;height:22px;border-radius:6px;background:rgba(249,199,79,0.15);color:var(--warn);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">1</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Download the persona file</p>
+            <p style="font-size:12px;color:var(--text-2);">A single <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">.md</code> file with a ready-to-use system prompt, identity, mental models, and topic repository.</p>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:22px;height:22px;border-radius:6px;background:rgba(249,199,79,0.15);color:var(--warn);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">2</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Paste the Quick Start prompt into any LLM</p>
+            <p style="font-size:12px;color:var(--text-2);">The file includes a self-contained system prompt. Copy it into Claude, ChatGPT, or Gemini's custom instructions — or paste it as the first message in a new chat.</p>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:22px;height:22px;border-radius:6px;background:rgba(249,199,79,0.15);color:var(--warn);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">3</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Build a board of advisors</p>
+            <p style="font-size:12px;color:var(--text-2);">Create multiple personas and combine them — the file includes instructions for running multi-persona board discussions.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
 </div><!-- end layout -->
 
 <script>
@@ -553,6 +631,36 @@
 let urls  = [];   // [{url, type}]
 let files = [];   // [{name, content}]
 let currentJobId = null;
+let currentMode  = 'skill'; // 'skill' | 'persona'
+
+// ── Mode switching ─────────────────────────────────────────
+function switchMode(mode) {
+  currentMode = mode;
+  const skillBtn   = document.getElementById('mode-skill-btn');
+  const personaBtn = document.getElementById('mode-persona-btn');
+  const buildBtn   = document.getElementById('build-btn');
+  const maxWrap    = document.getElementById('max-videos-wrap');
+
+  if (mode === 'skill') {
+    skillBtn.style.background   = 'rgba(107,79,232,0.18)';
+    skillBtn.style.borderColor  = 'var(--brand-500)';
+    skillBtn.style.color        = 'var(--brand-300)';
+    personaBtn.style.background = 'transparent';
+    personaBtn.style.borderColor= 'var(--border)';
+    personaBtn.style.color      = 'var(--text-2)';
+    buildBtn.innerHTML = '⚡&nbsp; Build Skill';
+    maxWrap.style.display = 'flex';
+  } else {
+    personaBtn.style.background = 'rgba(249,199,79,0.15)';
+    personaBtn.style.borderColor= 'rgba(249,199,79,0.4)';
+    personaBtn.style.color      = 'var(--warn)';
+    skillBtn.style.background   = 'transparent';
+    skillBtn.style.borderColor  = 'var(--border)';
+    skillBtn.style.color        = 'var(--text-2)';
+    buildBtn.innerHTML = '🎭&nbsp; Build Persona';
+    maxWrap.style.display = 'none';
+  }
+}
 
 // ── Tab switching ──────────────────────────────────────────
 function switchTab(tab, btn) {
@@ -672,15 +780,19 @@ async function startBuild() {
   }
 
   showError('');
-  document.getElementById('output-card').style.display  = 'none';
-  document.getElementById('progress-card').style.display = 'block';
+  document.getElementById('output-card').style.display         = 'none';
+  document.getElementById('persona-output-card').style.display = 'none';
+  document.getElementById('progress-card').style.display       = 'block';
   document.getElementById('log-container').innerHTML = '';
   document.getElementById('progress-spinner').style.display = 'inline-block';
-  document.getElementById('progress-title').textContent = 'Building skill...';
+  document.getElementById('progress-title').textContent =
+    currentMode === 'persona' ? 'Building persona...' : 'Building skill...';
   document.getElementById('build-btn').disabled = true;
 
+  const endpoint = currentMode === 'persona' ? '/build-persona' : '/build';
+
   try {
-    const res = await fetch('/build', {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -745,20 +857,44 @@ async function loadResult(jobId) {
     return;
   }
   document.getElementById('progress-spinner').style.display = 'none';
-  document.getElementById('progress-title').textContent = `Done — ${data.skill_name}`;
-  document.getElementById('output-title').textContent    = data.skill_name;
-  document.getElementById('output-summary').textContent  = data.summary || '';
-  document.getElementById('next-skill-name').textContent = data.skill_name;
-  document.getElementById('preview-skill').textContent   = data.skill_md   || '';
-  document.getElementById('preview-sources').textContent = data.sources_md || '';
-  document.getElementById('output-card').style.display  = 'block';
   document.getElementById('build-btn').disabled = false;
-  document.getElementById('output-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  if (data.job_type === 'persona') {
+    document.getElementById('progress-title').textContent    = `Done — ${data.persona_name}`;
+    document.getElementById('persona-output-title').textContent   = data.persona_name;
+    document.getElementById('persona-output-summary').textContent = data.summary || '';
+    document.getElementById('persona-preview').textContent        = data.persona_md || '';
+
+    const topicsWrap = document.getElementById('persona-topics-wrap');
+    const topicsEl   = document.getElementById('persona-topics');
+    const topics = data.topics_covered || [];
+    if (topics.length) {
+      topicsEl.innerHTML = topics.map(t =>
+        `<span style="font-size:11px;background:rgba(249,199,79,0.1);border:1px solid rgba(249,199,79,0.2);color:var(--warn);padding:2px 8px;border-radius:5px;">${t}</span>`
+      ).join('');
+      topicsWrap.style.display = 'block';
+    }
+
+    document.getElementById('persona-output-card').style.display = 'block';
+    document.getElementById('persona-output-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else {
+    document.getElementById('progress-title').textContent = `Done — ${data.skill_name}`;
+    document.getElementById('output-title').textContent    = data.skill_name;
+    document.getElementById('output-summary').textContent  = data.summary || '';
+    document.getElementById('next-skill-name').textContent = data.skill_name;
+    document.getElementById('preview-skill').textContent   = data.skill_md   || '';
+    document.getElementById('preview-sources').textContent = data.sources_md || '';
+    document.getElementById('output-card').style.display  = 'block';
+    document.getElementById('output-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 // ── Downloads & Install ──────────────────────────────────
 function download(type) {
   if (currentJobId) window.location.href = `/download/${currentJobId}/${type}`;
+}
+function downloadPersona() {
+  if (currentJobId) window.location.href = `/download/${currentJobId}/persona_md`;
 }
 
 async function installSkill() {

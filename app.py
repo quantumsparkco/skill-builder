@@ -175,6 +175,84 @@ def _finalize_skill(job_id, skill_result, q):
 
 
 # ──────────────────────────────────────────────
+# Persona background worker
+# ──────────────────────────────────────────────
+
+def run_build_persona(job_id, sources, max_videos, raw_text):
+    q = jobs[job_id]["queue"]
+
+    def log(msg, kind="info"):
+        q.put({"type": kind, "message": msg})
+
+    try:
+        from fetch_content import fetch
+        from generate_persona import generate_persona
+
+        all_parts = []
+
+        for url in sources:
+            log(f"Fetching: {url}")
+            try:
+                result = fetch(url, max_videos=max_videos, verbose=False)
+                all_parts.append({
+                    "title": result["title"],
+                    "content": result["content"],
+                    "url": url,
+                    "video_count": result.get("video_count", 1),
+                })
+                vids = result.get("video_count", 1)
+                chars = len(result["content"])
+                label = f"{vids} videos, {chars:,} chars" if vids > 1 else f"{chars:,} chars"
+                log(f"Got: {result['title']} ({label})", "success")
+            except Exception as e:
+                log(f"Failed: {url} — {e}", "error")
+
+        if raw_text:
+            all_parts.append({
+                "title": "Uploaded Content",
+                "content": raw_text,
+                "url": "",
+                "video_count": 1,
+            })
+            log(f"Got: Uploaded content ({len(raw_text):,} chars)", "success")
+
+        if not all_parts:
+            raise ValueError("No content was successfully fetched. Check URLs and try again.")
+
+        if len(all_parts) == 1:
+            combined = all_parts[0]["content"]
+            source_title = all_parts[0]["title"]
+            source_url = all_parts[0]["url"]
+        else:
+            parts_text = []
+            for p in all_parts:
+                header = f"# {p['title']}"
+                if p["url"]:
+                    header += f"\nSource: {p['url']}"
+                parts_text.append(f"{header}\n\n{p['content']}")
+            combined = "\n\n---\n\n".join(parts_text)
+            source_title = "Combined: " + ", ".join(p["title"][:25] for p in all_parts[:3])
+            source_url = sources[0] if sources else ""
+
+        log("Generating persona with Claude Opus 4.6...")
+        result = generate_persona(combined, source_title, source_url)
+
+        persona_name = result["persona_name"]
+        jobs[job_id].update({
+            "status": "done",
+            "result": result,
+            "skill_name": persona_name,
+        })
+        q.put({"type": "complete", "skill_name": persona_name})
+
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        log(f"Error: {e}", "error")
+        q.put({"type": "complete", "skill_name": None})
+
+
+# ──────────────────────────────────────────────
 # Routes
 # ──────────────────────────────────────────────
 
@@ -219,6 +297,42 @@ def build():
     return jsonify({"job_id": job_id})
 
 
+@app.route("/build-persona", methods=["POST"])
+def build_persona_route():
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return jsonify({"error": "ANTHROPIC_API_KEY is not set. Export it in your terminal before starting this app."}), 400
+
+    data = request.json
+    sources = [s.strip() for s in data.get("sources", []) if s.strip()]
+    raw_text = data.get("raw_text", "").strip()
+    max_videos = int(data.get("max_videos", 50))
+    files = data.get("files", [])
+
+    if files:
+        file_blocks = [f"# {f['name']}\n\n{f['content']}" for f in files]
+        if raw_text:
+            file_blocks.append(raw_text)
+        raw_text = "\n\n---\n\n".join(file_blocks)
+
+    if not sources and not raw_text:
+        return jsonify({"error": "Add at least one URL, file, or paste some text."}), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    jobs[job_id] = {
+        "status": "running",
+        "queue": queue.Queue(),
+        "result": None, "zip_path": None,
+        "skill_dir": None, "skill_name": None, "error": None,
+        "job_type": "persona",
+    }
+
+    t = threading.Thread(target=run_build_persona, args=(job_id, sources, max_videos, raw_text))
+    t.daemon = True
+    t.start()
+
+    return jsonify({"job_id": job_id})
+
+
 @app.route("/stream/<job_id>")
 def stream(job_id):
     if job_id not in jobs:
@@ -247,12 +361,18 @@ def result(job_id):
     job = jobs.get(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
+    r = job.get("result") or {}
+    is_persona = job.get("job_type") == "persona"
     return jsonify({
         "status": job["status"],
+        "job_type": job.get("job_type", "skill"),
         "skill_name": job.get("skill_name"),
-        "skill_md": job.get("result", {}).get("skill_md") if job.get("result") else None,
-        "sources_md": job.get("result", {}).get("sources_md") if job.get("result") else None,
-        "summary": job.get("result", {}).get("summary") if job.get("result") else None,
+        "skill_md": r.get("skill_md") if not is_persona else None,
+        "sources_md": r.get("sources_md") if not is_persona else None,
+        "persona_name": r.get("persona_name") if is_persona else None,
+        "persona_md": r.get("persona_md") if is_persona else None,
+        "topics_covered": r.get("topics_covered") if is_persona else None,
+        "summary": r.get("summary"),
         "questions": job.get("questions", []),
         "error": job.get("error"),
     })
@@ -347,6 +467,13 @@ def download(job_id, file_type):
         return send_file(
             io.BytesIO(content), as_attachment=True,
             download_name="sources.md", mimetype="text/markdown",
+        )
+    elif file_type == "persona_md":
+        content = job["result"]["persona_md"].encode("utf-8")
+        name = (job["result"].get("persona_name") or "persona").replace(" ", "-") + ".md"
+        return send_file(
+            io.BytesIO(content), as_attachment=True,
+            download_name=name, mimetype="text/markdown",
         )
     return "Unknown type", 404
 
