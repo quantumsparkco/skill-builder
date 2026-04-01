@@ -465,14 +465,24 @@
 
   <!-- Progress Card -->
   <div class="card" id="progress-card" style="padding:22px;margin-bottom:14px;display:none;">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;">
       <div style="display:flex;align-items:center;gap:10px;">
         <div class="spinner" id="progress-spinner"></div>
         <h2 id="progress-title" style="font-size:15px;font-weight:600;letter-spacing:-0.02em;">Building skill...</h2>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
-        <span id="elapsed-timer" style="font-family:var(--font-mono);font-size:12px;color:var(--text-3);">0:00</span>
+        <span id="elapsed-timer" style="font-family:var(--font-mono);font-size:13px;color:var(--text-2);">–:––</span>
         <span id="eta-label" style="font-size:11px;color:var(--text-3);display:none;"></span>
+      </div>
+    </div>
+    <!-- Progress bar (hidden until total is known) -->
+    <div id="progress-bar-wrap" style="display:none;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+        <span id="progress-pct" style="font-size:12px;font-weight:600;color:var(--brand-300);">0%</span>
+        <span id="progress-count" style="font-size:11px;color:var(--text-3);"></span>
+      </div>
+      <div style="height:4px;background:var(--elevated);border-radius:99px;overflow:hidden;">
+        <div id="progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--brand-500),var(--brand-300));border-radius:99px;transition:width 0.4s ease;"></div>
       </div>
     </div>
     <div id="log-container"></div>
@@ -648,46 +658,79 @@ let files = [];   // [{name, content}]
 let currentJobId = null;
 let currentMode  = 'skill'; // 'skill' | 'persona'
 
-// ── Timer ──────────────────────────────────────────────────
-let timerInterval  = null;
-let timerStart     = null;
-let fetchTimes     = []; // ms per source, for ETA estimation
+// ── Timer & Progress ───────────────────────────────────────
+let timerInterval   = null;
+let timerStart      = null;
+let countdownSecs   = null;   // null = no estimate yet, counts up; number = counts down
+let totalVideos     = 0;
+let completedVideos = 0;
+let itemStartTimes  = [];     // timestamps when each item started, for pace estimation
 
 function startTimer() {
-  timerStart = Date.now();
-  fetchTimes = [];
-  document.getElementById('eta-label').style.display = 'none';
-  document.getElementById('elapsed-timer').textContent = '0:00';
-  timerInterval = setInterval(() => {
-    const secs = Math.floor((Date.now() - timerStart) / 1000);
-    const m = Math.floor(secs / 60);
-    const s = String(secs % 60).padStart(2, '0');
+  timerStart      = Date.now();
+  countdownSecs   = null;
+  totalVideos     = 0;
+  completedVideos = 0;
+  itemStartTimes  = [];
+  document.getElementById('eta-label').style.display      = 'none';
+  document.getElementById('progress-bar-wrap').style.display = 'none';
+  document.getElementById('elapsed-timer').textContent    = '–:––';
+  timerInterval = setInterval(tickTimer, 1000);
+}
+
+function tickTimer() {
+  const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+  if (countdownSecs !== null) {
+    // Adjust countdown: original estimate minus elapsed
+    const remaining = Math.max(0, countdownSecs - elapsed);
+    const m = Math.floor(remaining / 60);
+    const s = String(remaining % 60).padStart(2, '0');
     document.getElementById('elapsed-timer').textContent = `${m}:${s}`;
-  }, 1000);
+    document.getElementById('eta-label').textContent = 'remaining';
+    document.getElementById('eta-label').style.display = 'block';
+  } else {
+    // No estimate yet — show elapsed
+    const m = Math.floor(elapsed / 60);
+    const s = String(elapsed % 60).padStart(2, '0');
+    document.getElementById('elapsed-timer').textContent = `${m}:${s}`;
+  }
+}
+
+function setTotal(count, estimatedSecs) {
+  totalVideos   = count;
+  countdownSecs = estimatedSecs;
+  document.getElementById('progress-bar-wrap').style.display = 'block';
+  document.getElementById('progress-count').textContent = `0 / ${count} videos`;
+  updateProgressBar(0, count);
+}
+
+function setProgress(current, total) {
+  completedVideos = current;
+  totalVideos     = total;
+
+  // Recalculate ETA based on actual pace
+  const elapsed = (Date.now() - timerStart) / 1000;
+  if (current > 0) {
+    const secsPerItem = elapsed / current;
+    const remaining   = (total - current) * secsPerItem + 30; // +30s for Claude
+    countdownSecs = Math.round(elapsed + remaining);
+  }
+
+  document.getElementById('progress-count').textContent = `${current} / ${total} videos`;
+  updateProgressBar(current, total);
+}
+
+function updateProgressBar(current, total) {
+  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
 }
 
 function stopTimer() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
 }
 
-function recordFetch() {
-  // Called each time a source finishes — used to build ETA
-  if (!timerStart) return;
-  fetchTimes.push(Date.now() - timerStart);
-  const totalSources = urls.length + (files.length > 0 ? 1 : 0) +
-    (document.getElementById('paste-input').value.trim() ? 1 : 0);
-  if (fetchTimes.length >= 1 && totalSources > fetchTimes.length) {
-    const avgMs = fetchTimes[fetchTimes.length - 1] / fetchTimes.length;
-    const remaining = totalSources - fetchTimes.length;
-    // Add ~25s for Claude generation
-    const etaSecs = Math.round((avgMs * remaining) / 1000) + 25;
-    const m = Math.floor(etaSecs / 60);
-    const s = String(etaSecs % 60).padStart(2, '0');
-    const etaEl = document.getElementById('eta-label');
-    etaEl.textContent = `~${m}:${s} remaining`;
-    etaEl.style.display = 'block';
-  }
-}
+function recordFetch() { /* kept for compatibility — progress now driven by SSE */ }
 
 // ── Mode switching ─────────────────────────────────────────
 function switchMode(mode) {
@@ -891,6 +934,7 @@ function resetBuildUI() {
   document.getElementById('build-btn').disabled = false;
   document.getElementById('stop-btn').style.display = 'none';
   document.getElementById('eta-label').style.display = 'none';
+  document.getElementById('progress-bar-wrap').style.display = 'none';
 }
 
 function streamProgress(jobId) {
@@ -899,6 +943,14 @@ function streamProgress(jobId) {
   es.onmessage = e => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'ping') return;
+    if (msg.type === 'total') {
+      setTotal(msg.count, msg.estimated_secs);
+      return;
+    }
+    if (msg.type === 'progress') {
+      setProgress(msg.current, msg.total);
+      return;
+    }
     if (msg.type === 'needs_input') {
       es.close(); currentEventSource = null;
       showQuestions(msg.questions, jobId);
@@ -907,11 +959,15 @@ function streamProgress(jobId) {
     }
     if (msg.type === 'complete') {
       es.close(); currentEventSource = null;
-      resetBuildUI();
-      msg.skill_name ? loadResult(jobId) : (() => {
-        document.getElementById('progress-spinner').style.display = 'none';
-        document.getElementById('progress-title').textContent = 'Build failed';
-      })();
+      // Show 100% briefly before resetting
+      if (totalVideos > 0) updateProgressBar(totalVideos, totalVideos);
+      setTimeout(() => {
+        resetBuildUI();
+        msg.skill_name ? loadResult(jobId) : (() => {
+          document.getElementById('progress-spinner').style.display = 'none';
+          document.getElementById('progress-title').textContent = 'Build failed';
+        })();
+      }, 400);
       return;
     }
     addLog(msg.message, msg.type);

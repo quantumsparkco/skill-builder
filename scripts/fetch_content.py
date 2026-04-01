@@ -60,7 +60,8 @@ def classify_youtube_url(url):
 
 def get_video_list(url, max_videos=50, verbose=True):
     """
-    Extract a list of (video_id, title) tuples from any YouTube URL.
+    Extract a list of video dicts from any YouTube URL.
+    Each dict: {id, title, description}
     Works for single videos, playlists, and channels.
     """
     if not YTDLP:
@@ -72,7 +73,7 @@ def get_video_list(url, max_videos=50, verbose=True):
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "extract_flat": True,         # Don't download, just list
+        "extract_flat": True,
         "playlistend": max_videos,
     }
 
@@ -82,13 +83,41 @@ def get_video_list(url, max_videos=50, verbose=True):
     if not info:
         return []
 
-    # Playlist / channel → multiple entries
     if "entries" in info:
         entries = [e for e in info["entries"] if e and e.get("id")]
-        return [(e["id"], e.get("title", "Untitled")) for e in entries]
+        return [{"id": e["id"], "title": e.get("title", "Untitled"), "description": e.get("description") or ""} for e in entries]
 
-    # Single video
-    return [(info["id"], info.get("title", "Untitled"))]
+    return [{"id": info["id"], "title": info.get("title", "Untitled"), "description": info.get("description") or ""}]
+
+
+_STOP_WORDS = {
+    "a","an","the","and","or","but","in","on","at","to","for","of","with",
+    "by","from","as","is","are","was","were","be","been","have","has","had",
+    "do","does","did","will","would","could","should","may","might",
+    "i","we","you","they","it","this","that","my","our","your","their",
+    "how","what","why","when","where","which","who",
+}
+
+def score_relevance(video, intention):
+    """
+    Score a video dict {title, description} against an intention string.
+    Returns int score (higher = more relevant). Returns 1 for all videos
+    when intention is empty.
+    """
+    if not intention:
+        return 1
+    keywords = [w for w in re.findall(r'\b[a-z]{2,}\b', intention.lower()) if w not in _STOP_WORDS]
+    if not keywords:
+        return 1
+    title_lower = video["title"].lower()
+    desc_lower  = (video["description"] or "").lower()
+    score = 0
+    for kw in keywords:
+        if kw in title_lower:
+            score += 3          # title match is strongest signal
+        elif kw in desc_lower:
+            score += 1
+    return score
 
 
 def get_channel_title(url):
@@ -186,30 +215,56 @@ def parse_vtt(vtt_text):
 # Multi-video fetch (playlist / channel)
 # ──────────────────────────────────────────────
 
-def fetch_youtube_collection(url, max_videos=50, verbose=True):
+def fetch_youtube_collection(url, max_videos=50, verbose=True, intention="", log_fn=None):
     """
-    Fetch all transcripts from a playlist or channel.
-    Returns a dict with combined content and per-video breakdown.
+    Fetch transcripts from a playlist or channel, optionally filtered by intention.
+    log_fn(dict) is called with SSE-style message dicts for progress reporting.
     """
+    def _log(msg, kind="info"):
+        if log_fn:
+            log_fn({"type": kind, "message": msg})
+        elif verbose:
+            print(f"  {msg}", flush=True)
+
     url_type, _ = classify_youtube_url(url)
     channel_title = get_channel_title(url)
+    _log(f"Scanning {channel_title}...")
 
-    if verbose:
-        print(f"  Collection: {channel_title}")
-
-    videos = get_video_list(url, max_videos=max_videos, verbose=verbose)
-
-    if not videos:
+    all_videos = get_video_list(url, max_videos=max_videos, verbose=False)
+    if not all_videos:
         raise ValueError("No videos found at that URL.")
 
-    if verbose:
-        print(f"  Found {len(videos)} video(s). Fetching transcripts...")
+    # Filter by relevance if intention provided
+    if intention:
+        scored = [(v, score_relevance(v, intention)) for v in all_videos]
+        relevant = [v for v, s in scored if s > 0]
+        skipped = len(all_videos) - len(relevant)
+        if not relevant:
+            # Fall back to all videos if nothing matched
+            relevant = all_videos
+            _log(f"No title/description matches for intention — fetching all {len(all_videos)} videos", "warn")
+        else:
+            # Sort by score descending
+            relevant = [v for v, s in sorted(scored, key=lambda x: -x[1]) if s > 0]
+            _log(f"Filtered to {len(relevant)} relevant videos (skipped {skipped} off-topic)", "info")
+    else:
+        relevant = all_videos
+
+    total = len(relevant)
+    # Estimate: ~4s per video + 30s for Claude
+    estimated_secs = total * 4 + 30
+    if log_fn:
+        log_fn({"type": "total", "count": total, "estimated_secs": estimated_secs})
+    elif verbose:
+        print(f"  Fetching transcripts for {total} video(s)...")
 
     results = []
     success = 0
-    for i, (vid_id, title) in enumerate(videos, 1):
+    for i, video in enumerate(relevant, 1):
+        vid_id = video["id"]
+        title  = video["title"]
         if verbose:
-            print(f"  [{i}/{len(videos)}] {title[:60]}", end=" ", flush=True)
+            print(f"  [{i}/{total}] {title[:60]}", end=" ", flush=True)
 
         text, method = get_transcript_text(vid_id, verbose=False)
         if text:
@@ -221,25 +276,21 @@ def fetch_youtube_collection(url, max_videos=50, verbose=True):
                 "url": f"https://www.youtube.com/watch?v={vid_id}",
             })
             success += 1
-            if verbose:
-                print(f"✓ ({len(text):,} chars)", flush=True)
+            _log(f"[{i}/{total}] Got: {title[:55]} ({len(text):,} chars)", "success")
         else:
-            if verbose:
-                print(f"✗ (no transcript)", flush=True)
+            _log(f"[{i}/{total}] No transcript: {title[:55]}", "info")
+
+        if log_fn:
+            log_fn({"type": "progress", "current": i, "total": total})
 
     if not results:
         raise ValueError("No transcripts were available for any video in this collection.")
 
-    # Build combined content — structured so Claude understands the context
-    parts = [f"# {channel_title}\n\nSource: {url}\nVideos with transcripts: {success}/{len(videos)}\n"]
+    parts = [f"# {channel_title}\n\nSource: {url}\nVideos with transcripts: {success}/{total}\n"]
     for r in results:
         parts.append(f"\n---\n\n## {r['title']}\nURL: {r['url']}\n\n{r['transcript']}")
 
     combined = "\n".join(parts)
-    total_chars = sum(len(r["transcript"]) for r in results)
-
-    if verbose:
-        print(f"\n  Total content: {total_chars:,} chars across {success} videos")
 
     return {
         "title": channel_title,
@@ -331,7 +382,7 @@ def fetch_file(path):
 # Main dispatcher
 # ──────────────────────────────────────────────
 
-def fetch(source, max_videos=50, verbose=True):
+def fetch(source, max_videos=50, verbose=True, intention="", log_fn=None):
     """Dispatch to the right fetcher based on URL type."""
     if not source.startswith("http"):
         return fetch_file(source)
@@ -341,7 +392,10 @@ def fetch(source, max_videos=50, verbose=True):
         if url_type == "video":
             return fetch_youtube_video(vid_id, original_url=source)
         elif url_type in ("playlist", "channel"):
-            return fetch_youtube_collection(source, max_videos=max_videos, verbose=verbose)
+            return fetch_youtube_collection(
+                source, max_videos=max_videos, verbose=verbose,
+                intention=intention, log_fn=log_fn,
+            )
         else:
             raise ValueError(f"Unrecognized YouTube URL format: {source}")
 

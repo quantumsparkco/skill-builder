@@ -51,7 +51,12 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
                 return
             log(f"Fetching: {url}")
             try:
-                result = fetch(url, max_videos=max_videos, verbose=False)
+                def _fwd(msg):
+                    if jobs[job_id].get("cancelled"):
+                        return
+                    q.put(msg)
+                result = fetch(url, max_videos=max_videos, verbose=False,
+                               intention=intention, log_fn=_fwd)
                 all_parts.append({
                     "title": result["title"],
                     "content": result["content"],
@@ -201,7 +206,12 @@ def run_build_persona(job_id, sources, max_videos, raw_text, intention=""):
                 return
             log(f"Fetching: {url}")
             try:
-                result = fetch(url, max_videos=max_videos, verbose=False)
+                def _fwd_p(msg):
+                    if jobs[job_id].get("cancelled"):
+                        return
+                    q.put(msg)
+                result = fetch(url, max_videos=max_videos, verbose=False,
+                               intention=intention, log_fn=_fwd_p)
                 all_parts.append({
                     "title": result["title"],
                     "content": result["content"],
