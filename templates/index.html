@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skill Builder</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Heading font: Space Grotesk (geometric display) — Body font: Inter (clean sans) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Brand palette — derived from a single source hue #6B4FE8 */
+    --brand-50:  #f0edff;
+    --brand-100: #ddd6ff;
+    --brand-300: #a695f7;
+    --brand-400: #8870f3;
+    --brand-500: #6B4FE8;
+    --brand-600: #5a40d4;
+    --brand-700: #4430b0;
+
+    /* Surface system — 4 layers */
+    --bg:        #090b11;
+    --surface:   #0f1119;
+    --elevated:  #181c28;
+    --floating:  #1f2333;
+    --border:    rgba(255,255,255,0.07);
+    --border-hi: rgba(255,255,255,0.13);
+
+    /* Semantic */
+    --success:  #1de9b6;
+    --error:    #ff6b81;
+    --warn:     #f9c74f;
+    --text:     #dde1f0;
+    --text-2:   #8b90a8;
+    --text-3:   #4e5268;
+
+    /* Typography */
+    --font-head: 'Space Grotesk', system-ui, sans-serif;
+    --font-body: 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { -webkit-font-smoothing: antialiased; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Noise grain layer ── */
+  body::after {
+    content: '';
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    opacity: 0.6;
+  }
+
+  /* ── Background gradient layers ── */
+  .bg-glow {
+    position: fixed; pointer-events: none; z-index: 0;
+    border-radius: 50%;
+    filter: blur(80px);
+  }
+
+  /* ── Typography ── */
+  h1, h2, h3, .heading {
+    font-family: var(--font-head);
+    letter-spacing: -0.03em;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    /* Layered color-tinted shadow */
+    box-shadow:
+      0 1px 0 0 rgba(255,255,255,0.04) inset,
+      0 2px 4px -1px rgba(0,0,0,0.5),
+      0 8px 24px -4px rgba(0,0,0,0.4),
+      0 24px 48px -8px rgba(7,3,20,0.5);
+  }
+
+  /* ── Tabs ── */
+  .tab-strip {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 3px;
+    display: inline-flex; gap: 2px;
+  }
+  .tab-btn {
+    font-family: var(--font-body);
+    font-size: 12.5px; font-weight: 500;
+    color: var(--text-2);
+    padding: 6px 14px;
+    border-radius: 7px;
+    border: none; background: none;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn:focus-visible { outline: 2px solid var(--brand-400); outline-offset: 1px; }
+  .tab-btn:active { opacity: 0.8; }
+  .tab-btn.active {
+    background: var(--elevated);
+    color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ── Inputs ── */
+  input[type="text"],
+  input[type="number"],
+  textarea {
+    width: 100%;
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 13px;
+    padding: 9px 13px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    resize: vertical;
+    line-height: 1.6;
+  }
+  input[type="text"]:hover,
+  input[type="number"]:hover,
+  textarea:hover { border-color: var(--border-hi); }
+  input[type="text"]:focus,
+  input[type="number"]:focus,
+  textarea:focus {
+    border-color: var(--brand-400);
+    box-shadow: 0 0 0 3px rgba(107,79,232,0.18);
+  }
+  input::placeholder, textarea::placeholder { color: var(--text-3); }
+
+  /* ── Buttons ── */
+  .btn-primary {
+    font-family: var(--font-body);
+    font-size: 13.5px; font-weight: 600;
+    background: var(--brand-500);
+    color: #fff;
+    border: none;
+    border-radius: 9px;
+    padding: 9px 22px;
+    cursor: pointer;
+    position: relative;
+    box-shadow:
+      0 0 0 1px rgba(107,79,232,0.5),
+      0 4px 12px rgba(107,79,232,0.35),
+      0 1px 0 rgba(255,255,255,0.15) inset;
+    transition:
+      background cubic-bezier(0.34,1.56,0.64,1) 0.2s,
+      box-shadow cubic-bezier(0.34,1.56,0.64,1) 0.2s,
+      transform cubic-bezier(0.34,1.56,0.64,1) 0.15s;
+  }
+  .btn-primary:hover {
+    background: var(--brand-400);
+    box-shadow: 0 0 0 1px rgba(136,112,243,0.6), 0 6px 20px rgba(107,79,232,0.45), 0 1px 0 rgba(255,255,255,0.15) inset;
+  }
+  .btn-primary:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(107,79,232,0.4), 0 4px 12px rgba(107,79,232,0.35);
+  }
+  .btn-primary:active { transform: scale(0.97); }
+  .btn-primary:disabled {
+    opacity: 0.45; cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .btn-ghost {
+    font-family: var(--font-body);
+    font-size: 12.5px; font-weight: 500;
+    background: var(--elevated);
+    color: var(--text-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  }
+  .btn-ghost:hover { background: var(--floating); color: var(--text); border-color: var(--border-hi); }
+  .btn-ghost:focus-visible { outline: 2px solid var(--brand-400); outline-offset: 2px; }
+  .btn-ghost:active { transform: scale(0.98); }
+
+  .btn-success {
+    font-family: var(--font-body);
+    font-size: 12.5px; font-weight: 600;
+    background: rgba(29,233,182,0.12);
+    color: var(--success);
+    border: 1px solid rgba(29,233,182,0.28);
+    border-radius: 8px;
+    padding: 7px 16px;
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+  }
+  .btn-success:hover {
+    background: rgba(29,233,182,0.2);
+    box-shadow: 0 0 12px rgba(29,233,182,0.2);
+  }
+  .btn-success:focus-visible { outline: 2px solid var(--success); outline-offset: 2px; }
+  .btn-success:active { transform: scale(0.98); }
+
+  /* ── URL pills ── */
+  .pill {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 11px;
+    transition: border-color 0.15s;
+  }
+  .pill:hover { border-color: var(--border-hi); }
+  .pill-badge {
+    font-family: var(--font-body);
+    font-size: 10px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .badge-channel  { background: rgba(107,79,232,0.2); color: var(--brand-300); }
+  .badge-playlist { background: rgba(249,199,79,0.15); color: var(--warn); }
+  .badge-video    { background: rgba(29,233,182,0.15); color: var(--success); }
+  .badge-web      { background: rgba(139,144,168,0.15); color: var(--text-2); }
+  .badge-file     { background: rgba(255,107,129,0.15); color: var(--error); }
+
+  .pill-text {
+    font-family: var(--font-mono);
+    font-size: 11.5px; color: var(--text);
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pill-meta { font-size: 11px; color: var(--text-3); flex-shrink: 0; }
+  .pill-remove {
+    background: none; border: none; cursor: pointer;
+    color: var(--text-3); font-size: 17px; line-height: 1;
+    padding: 0 2px; flex-shrink: 0;
+    transition: color 0.1s, transform 0.1s;
+    border-radius: 4px;
+  }
+  .pill-remove:hover { color: var(--error); transform: scale(1.15); }
+  .pill-remove:focus-visible { outline: 2px solid var(--error); outline-offset: 2px; }
+
+  /* ── Drop zone ── */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 11px;
+    padding: 32px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s, transform 0.15s;
+    background: transparent;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--brand-400);
+    background: rgba(107,79,232,0.06);
+  }
+  .drop-zone:focus-visible { outline: 2px solid var(--brand-400); outline-offset: 3px; }
+  .drop-zone:active { transform: scale(0.995); }
+
+  /* ── Progress log ── */
+  .log-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    animation: fadeSlide 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
+  }
+  .log-row:last-child { border-bottom: none; }
+
+  .log-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0; margin-top: 5px;
+  }
+  .dot-info    { background: var(--text-3); }
+  .dot-success { background: var(--success); box-shadow: 0 0 6px rgba(29,233,182,0.5); }
+  .dot-error   { background: var(--error);   box-shadow: 0 0 6px rgba(255,107,129,0.5); }
+  .dot-spin {
+    background: transparent;
+    border: 2px solid var(--brand-400);
+    border-top-color: transparent;
+    animation: spin 0.65s linear infinite;
+  }
+
+  /* ── Code preview ── */
+  .code-block {
+    background: var(--elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    font-family: var(--font-mono);
+    font-size: 12px; line-height: 1.75;
+    overflow: auto; max-height: 380px;
+    white-space: pre-wrap; color: #c5cce0;
+  }
+
+  /* ── Micro spinner ── */
+  .spinner {
+    display: inline-block;
+    width: 17px; height: 17px;
+    border: 2px solid var(--border);
+    border-top-color: var(--brand-400);
+    border-radius: 50%;
+    animation: spin 0.65s linear infinite;
+  }
+
+  /* ── Label ── */
+  .field-label {
+    font-size: 11px; font-weight: 600;
+    color: var(--text-3); letter-spacing: 0.07em; text-transform: uppercase;
+    display: block; margin-bottom: 7px;
+  }
+
+  /* ── Divider ── */
+  hr { border: none; border-top: 1px solid var(--border); }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--floating); border-radius: 99px; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeSlide {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in { animation: fadeIn 0.3s cubic-bezier(0.34,1.56,0.64,1) both; }
+</style>
+</head>
+<body>
+
+<!-- Background gradient layers -->
+<div class="bg-glow" style="top:-180px;left:30%;width:500px;height:380px;background:radial-gradient(ellipse,rgba(107,79,232,0.12) 0%,transparent 70%);"></div>
+<div class="bg-glow" style="top:60%;left:-10%;width:400px;height:400px;background:radial-gradient(ellipse,rgba(29,233,182,0.05) 0%,transparent 70%);"></div>
+<div class="bg-glow" style="top:20%;right:-8%;width:350px;height:350px;background:radial-gradient(ellipse,rgba(249,199,79,0.04) 0%,transparent 70%);"></div>
+
+<div style="position:relative;z-index:1;max-width:740px;margin:0 auto;padding:40px 20px 100px;">
+
+  <!-- Header -->
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:36px;">
+    <div style="
+      width:42px;height:42px;
+      background:linear-gradient(135deg,var(--brand-500),var(--brand-700));
+      border-radius:12px;
+      display:flex;align-items:center;justify-content:center;
+      font-size:20px;
+      box-shadow:0 4px 16px rgba(107,79,232,0.45),0 0 0 1px rgba(107,79,232,0.3);
+    ">⚡</div>
+    <div>
+      <h1 style="font-family:var(--font-head);font-size:22px;font-weight:700;letter-spacing:-0.04em;line-height:1.1;">Skill Builder</h1>
+      <p style="font-size:12.5px;color:var(--text-2);margin-top:2px;">Turn any tutorial into a Claude Code skill</p>
+    </div>
+  </div>
+
+  <!-- Input Card -->
+  <div class="card" style="padding:22px;margin-bottom:14px;">
+    <div class="tab-strip" style="margin-bottom:18px;">
+      <button class="tab-btn active" onclick="switchTab('urls',this)">Links</button>
+      <button class="tab-btn" onclick="switchTab('files',this)">Upload Files</button>
+      <button class="tab-btn" onclick="switchTab('paste',this)">Paste Text</button>
+    </div>
+
+    <!-- LINKS TAB -->
+    <div id="tab-urls" class="tab-panel active">
+      <span class="field-label">Add URLs</span>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input type="text" id="url-input"
+          placeholder="YouTube channel, playlist, video — or any website URL"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();addUrl()}"
+          style="flex:1;" />
+        <button class="btn-ghost" onclick="addUrl()" style="white-space:nowrap;padding:9px 16px;">Add</button>
+      </div>
+      <p style="font-size:11.5px;color:var(--text-3);margin-bottom:12px;">
+        youtube.com/@channel · /playlist?list= · /watch?v= · youtu.be/ · any https:// URL
+      </p>
+      <div id="url-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
+
+    <!-- FILES TAB -->
+    <div id="tab-files" class="tab-panel">
+      <div class="drop-zone" id="drop-zone" tabindex="0"
+        role="button" aria-label="Drop files to upload"
+        onclick="document.getElementById('file-input').click()"
+        onkeydown="if(event.key==='Enter'||event.key===' ')document.getElementById('file-input').click()"
+        ondragover="event.preventDefault();this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleDrop(event)">
+        <div style="font-size:30px;margin-bottom:8px;">📄</div>
+        <p style="font-family:var(--font-head);font-size:15px;font-weight:600;letter-spacing:-0.02em;margin-bottom:4px;">Drop files here</p>
+        <p style="font-size:12px;color:var(--text-2);">or click to browse · .txt · .md · .pdf</p>
+      </div>
+      <input type="file" id="file-input" multiple accept=".txt,.md,.pdf" style="display:none" onchange="handleFiles(this.files)">
+      <div id="file-list" style="display:flex;flex-direction:column;gap:6px;margin-top:10px;"></div>
+    </div>
+
+    <!-- PASTE TAB -->
+    <div id="tab-paste" class="tab-panel">
+      <span class="field-label">Paste Content</span>
+      <textarea id="paste-input" rows="9"
+        placeholder="Paste a transcript, course notes, documentation, or any text you want to distill into a skill..."></textarea>
+    </div>
+  </div>
+
+  <!-- Options + Build -->
+  <div class="card" style="padding:16px 22px;margin-bottom:14px;">
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="field-label" style="margin:0;white-space:nowrap;">Max videos</span>
+        <input type="number" id="max-videos" value="50" min="1" max="500"
+          style="width:68px;text-align:center;padding:7px;" />
+        <span style="font-size:12px;color:var(--text-3);">per channel / playlist</span>
+      </div>
+      <div style="flex:1;display:flex;justify-content:flex-end;gap:8px;align-items:center;">
+        <span id="source-count" style="font-size:12px;color:var(--text-3);"></span>
+        <button class="btn-primary" id="build-btn" onclick="startBuild()">
+          ⚡&nbsp; Build Skill
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error banner -->
+  <div id="error-banner" style="display:none;
+    background:rgba(255,107,129,0.08);border:1px solid rgba(255,107,129,0.25);
+    border-radius:9px;padding:11px 15px;margin-bottom:14px;
+    color:var(--error);font-size:13px;"></div>
+
+  <!-- Progress Card -->
+  <div class="card" id="progress-card" style="padding:22px;margin-bottom:14px;display:none;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+      <div class="spinner" id="progress-spinner"></div>
+      <h2 id="progress-title" style="font-size:15px;font-weight:600;letter-spacing:-0.02em;">Building skill...</h2>
+    </div>
+    <div id="log-container"></div>
+  </div>
+
+  <!-- Output Card -->
+  <div class="card fade-in" id="output-card" style="padding:22px;display:none;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="
+          width:38px;height:38px;flex-shrink:0;
+          background:rgba(29,233,182,0.12);
+          border:1px solid rgba(29,233,182,0.25);
+          border-radius:10px;
+          display:flex;align-items:center;justify-content:center;font-size:18px;">✅</div>
+        <div>
+          <h2 id="output-title" style="font-size:16px;font-weight:700;letter-spacing:-0.03em;line-height:1.2;"></h2>
+          <p id="output-summary" style="font-size:12.5px;color:var(--text-2);margin-top:3px;line-height:1.5;"></p>
+        </div>
+      </div>
+    </div>
+
+    <hr style="margin-bottom:16px;">
+
+    <!-- Download + Install row -->
+    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:18px;">
+      <button class="btn-ghost" onclick="download('zip')">⬇ Download .zip</button>
+      <button class="btn-ghost" onclick="download('skill_md')">⬇ SKILL.md</button>
+      <button class="btn-ghost" onclick="download('sources_md')">⬇ sources.md</button>
+      <button class="btn-success" id="install-btn" onclick="installSkill()">⚡ Install to Claude Code</button>
+    </div>
+
+    <!-- Preview tabs -->
+    <div class="tab-strip" style="margin-bottom:12px;">
+      <button class="tab-btn active" onclick="switchPreview('skill',this)">SKILL.md</button>
+      <button class="tab-btn" onclick="switchPreview('sources',this)">sources.md</button>
+    </div>
+    <div id="preview-skill"   class="code-block"></div>
+    <div id="preview-sources" class="code-block" style="display:none;"></div>
+
+    <!-- Install banner -->
+    <div id="install-banner" style="display:none;margin-top:14px;
+      border-radius:9px;padding:12px 14px;font-size:13px;"></div>
+  </div>
+
+</div><!-- end layout -->
+
+<script>
+// ── State ──────────────────────────────────────────────────
+let urls  = [];   // [{url, type}]
+let files = [];   // [{name, content}]
+let currentJobId = null;
+
+// ── Tab switching ──────────────────────────────────────────
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const strip = btn.closest('.tab-strip');
+  strip.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  btn.classList.add('active');
+}
+
+function switchPreview(tab, btn) {
+  ['skill','sources'].forEach(t => {
+    document.getElementById('preview-' + t).style.display = t === tab ? 'block' : 'none';
+  });
+  const strip = btn.closest('.tab-strip');
+  strip.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+// ── URL handling ──────────────────────────────────────────
+function classifyUrl(u) {
+  if (/youtube\.com\/@|youtube\.com\/c\/|youtube\.com\/channel\//.test(u)) return 'channel';
+  if (/[?&]list=/.test(u)) return 'playlist';
+  if (/youtube\.com\/watch|youtu\.be\//.test(u)) return 'video';
+  if (u.startsWith('http')) return 'web';
+  return 'text';
+}
+
+function addUrl() {
+  const inp = document.getElementById('url-input');
+  const raw = inp.value.trim();
+  if (!raw) return;
+  const parts = raw.split(/[\n\r\s,]+/).map(s => s.trim()).filter(s => s.length > 4);
+  parts.forEach(u => {
+    if (!urls.find(x => x.url === u)) urls.push({ url: u, type: classifyUrl(u) });
+  });
+  inp.value = '';
+  renderUrls();
+  updateCount();
+}
+
+function removeUrl(url) {
+  urls = urls.filter(u => u.url !== url);
+  renderUrls(); updateCount();
+}
+
+function renderUrls() {
+  const list = document.getElementById('url-list');
+  list.innerHTML = '';
+  urls.forEach(({ url, type }) => {
+    const d = document.createElement('div');
+    d.className = 'pill';
+    d.innerHTML = `
+      <span class="pill-badge badge-${type}">${type}</span>
+      <span class="pill-text" title="${url}">${url}</span>
+      <button class="pill-remove" onclick="removeUrl(${JSON.stringify(url)})" aria-label="Remove">×</button>`;
+    list.appendChild(d);
+  });
+}
+
+// ── File handling ─────────────────────────────────────────
+async function handleFiles(fl) {
+  for (const f of fl) {
+    if (files.find(x => x.name === f.name)) continue;
+    const content = await readFile(f);
+    files.push({ name: f.name, content });
+  }
+  renderFiles(); updateCount();
+}
+function readFile(f) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result);
+    r.onerror = rej;
+    r.readAsText(f);
+  });
+}
+function removeFile(name) {
+  files = files.filter(f => f.name !== name);
+  renderFiles(); updateCount();
+}
+function renderFiles() {
+  const list = document.getElementById('file-list');
+  list.innerHTML = '';
+  files.forEach(({ name, content }) => {
+    const d = document.createElement('div');
+    d.className = 'pill';
+    d.innerHTML = `
+      <span class="pill-badge badge-file">file</span>
+      <span class="pill-text">${name}</span>
+      <span class="pill-meta">${(content.length/1000).toFixed(1)}k chars</span>
+      <button class="pill-remove" onclick="removeFile(${JSON.stringify(name)})" aria-label="Remove">×</button>`;
+    list.appendChild(d);
+  });
+}
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('drag-over');
+  handleFiles(e.dataTransfer.files);
+}
+
+// ── Source count label ────────────────────────────────────
+function updateCount() {
+  const n = urls.length + files.length;
+  const el = document.getElementById('source-count');
+  el.textContent = n > 0 ? `${n} source${n > 1 ? 's' : ''} queued` : '';
+}
+
+// ── Build ─────────────────────────────────────────────────
+async function startBuild() {
+  const rawText   = document.getElementById('paste-input').value.trim();
+  const maxVideos = parseInt(document.getElementById('max-videos').value) || 50;
+
+  if (!urls.length && !files.length && !rawText) {
+    showError('Add at least one URL, upload a file, or paste some text.');
+    return;
+  }
+
+  showError('');
+  document.getElementById('output-card').style.display  = 'none';
+  document.getElementById('progress-card').style.display = 'block';
+  document.getElementById('log-container').innerHTML = '';
+  document.getElementById('progress-spinner').style.display = 'inline-block';
+  document.getElementById('progress-title').textContent = 'Building skill...';
+  document.getElementById('build-btn').disabled = true;
+
+  try {
+    const res = await fetch('/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sources: urls.map(u => u.url),
+        max_videos: maxVideos,
+        raw_text: rawText,
+        files,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || 'Build failed'); document.getElementById('build-btn').disabled = false; return; }
+    currentJobId = data.job_id;
+    streamProgress(data.job_id);
+  } catch(e) {
+    showError('Request failed: ' + e.message);
+    document.getElementById('build-btn').disabled = false;
+  }
+}
+
+function streamProgress(jobId) {
+  const es = new EventSource('/stream/' + jobId);
+  es.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'ping') return;
+    if (msg.type === 'complete') {
+      es.close();
+      msg.skill_name ? loadResult(jobId) : (() => {
+        document.getElementById('progress-spinner').style.display = 'none';
+        document.getElementById('progress-title').textContent = 'Build failed';
+        document.getElementById('build-btn').disabled = false;
+      })();
+      return;
+    }
+    addLog(msg.message, msg.type);
+  };
+  es.onerror = () => { es.close(); document.getElementById('build-btn').disabled = false; };
+}
+
+function addLog(message, kind) {
+  const container = document.getElementById('log-container');
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  const isSpinning = kind === 'info' && /generat|claude/i.test(message);
+  const dotClass = isSpinning ? 'dot-spin' : (kind === 'success' ? 'dot-success' : kind === 'error' ? 'dot-error' : 'dot-info');
+  const color = kind === 'success' ? 'var(--success)' : kind === 'error' ? 'var(--error)' : 'var(--text)';
+  row.innerHTML = `<div class="log-dot ${dotClass}"></div><span style="font-size:13px;color:${color};">${message}</span>`;
+  container.appendChild(row);
+  container.scrollTop = container.scrollHeight;
+}
+
+async function loadResult(jobId) {
+  const res  = await fetch('/result/' + jobId);
+  const data = await res.json();
+  if (data.status !== 'done') {
+    document.getElementById('progress-title').textContent = 'Build failed';
+    document.getElementById('build-btn').disabled = false;
+    return;
+  }
+  document.getElementById('progress-spinner').style.display = 'none';
+  document.getElementById('progress-title').textContent = `Done — ${data.skill_name}`;
+  document.getElementById('output-title').textContent   = data.skill_name;
+  document.getElementById('output-summary').textContent = data.summary || '';
+  document.getElementById('preview-skill').textContent   = data.skill_md   || '';
+  document.getElementById('preview-sources').textContent = data.sources_md || '';
+  document.getElementById('output-card').style.display  = 'block';
+  document.getElementById('build-btn').disabled = false;
+  document.getElementById('output-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── Downloads & Install ──────────────────────────────────
+function download(type) {
+  if (currentJobId) window.location.href = `/download/${currentJobId}/${type}`;
+}
+
+async function installSkill() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('install-btn');
+  btn.disabled = true; btn.textContent = 'Installing...';
+
+  const res  = await fetch('/install/' + currentJobId, { method: 'POST' });
+  const data = await res.json();
+  btn.disabled = false; btn.textContent = '⚡ Install to Claude Code';
+
+  const banner = document.getElementById('install-banner');
+  banner.style.display = 'block';
+  if (data.success) {
+    banner.style.background = 'rgba(29,233,182,0.08)';
+    banner.style.border     = '1px solid rgba(29,233,182,0.22)';
+    banner.style.color      = 'var(--success)';
+    banner.textContent = `✓ ${data.message}`;
+  } else {
+    banner.style.background = 'rgba(255,107,129,0.08)';
+    banner.style.border     = '1px solid rgba(255,107,129,0.22)';
+    banner.style.color      = 'var(--error)';
+    banner.textContent = `Error: ${data.error}`;
+  }
+}
+
+// ── Error banner ─────────────────────────────────────────
+function showError(msg) {
+  const el = document.getElementById('error-banner');
+  el.style.display = msg ? 'block' : 'none';
+  el.textContent   = msg;
+}
+</script>
+</body>
+</html>
