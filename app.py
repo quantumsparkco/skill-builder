@@ -257,6 +257,11 @@ def run_build_persona(job_id, sources, max_videos, raw_text):
 # ──────────────────────────────────────────────
 
 @app.route("/")
+def landing():
+    return render_template("landing.html")
+
+
+@app.route("/app")
 def index():
     return render_template("index.html")
 
