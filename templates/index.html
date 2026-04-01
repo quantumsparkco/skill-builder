@@ -451,6 +451,19 @@
     <div id="log-container"></div>
   </div>
 
+  <!-- Questions Card -->
+  <div class="card fade-in" id="questions-card" style="padding:22px;margin-bottom:14px;display:none;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="width:38px;height:38px;flex-shrink:0;background:rgba(249,199,79,0.12);border:1px solid rgba(249,199,79,0.25);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">⚠️</div>
+      <div>
+        <h2 style="font-size:16px;font-weight:700;letter-spacing:-0.03em;">Contradictions found</h2>
+        <p style="font-size:12.5px;color:var(--text-2);margin-top:2px;">The sources disagreed on a few things. Answer these so the skill reflects your priorities — or just accept the recommendation.</p>
+      </div>
+    </div>
+    <div id="questions-list" style="display:flex;flex-direction:column;gap:16px;margin-bottom:18px;"></div>
+    <button class="btn-primary" onclick="submitAnswers()">Continue Building Skill →</button>
+  </div>
+
   <!-- Output Card -->
   <div class="card fade-in" id="output-card" style="padding:22px;display:none;">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px;">
@@ -650,6 +663,11 @@ function streamProgress(jobId) {
   es.onmessage = e => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'ping') return;
+    if (msg.type === 'needs_input') {
+      es.close();
+      showQuestions(msg.questions, jobId);
+      return;
+    }
     if (msg.type === 'complete') {
       es.close();
       msg.skill_name ? loadResult(jobId) : (() => {
@@ -722,6 +740,52 @@ async function installSkill() {
     banner.style.color      = 'var(--error)';
     banner.textContent = `Error: ${data.error}`;
   }
+}
+
+// ── Contradiction questions ──────────────────────────────
+function showQuestions(questions, jobId) {
+  document.getElementById('progress-spinner').style.display = 'none';
+  document.getElementById('progress-title').textContent = `Paused — ${questions.length} conflict${questions.length > 1 ? 's' : ''} to resolve`;
+
+  const list = document.getElementById('questions-list');
+  list.innerHTML = '';
+  questions.forEach((q, i) => {
+    const div = document.createElement('div');
+    div.style.cssText = 'background:var(--elevated);border:1px solid var(--border);border-radius:10px;padding:14px 16px;';
+    div.innerHTML = `
+      <p style="font-size:13px;color:var(--text);margin-bottom:10px;line-height:1.6;">${q}</p>
+      <textarea data-index="${i}" rows="2"
+        placeholder="Type your answer, or leave blank to use the recommended default..."
+        style="margin-bottom:0;"></textarea>`;
+    list.appendChild(div);
+  });
+
+  document.getElementById('questions-card').style.display = 'block';
+  document.getElementById('questions-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('questions-card').dataset.jobId = jobId;
+}
+
+async function submitAnswers() {
+  const jobId = document.getElementById('questions-card').dataset.jobId;
+  const textareas = document.querySelectorAll('#questions-list textarea');
+  const questions = document.querySelectorAll('#questions-list p');
+
+  const answers = Array.from(textareas).map((ta, i) => ({
+    question: questions[i].textContent,
+    answer: ta.value.trim() || 'Use your recommended default.',
+  }));
+
+  document.getElementById('questions-card').style.display = 'none';
+  document.getElementById('progress-spinner').style.display = 'inline-block';
+  document.getElementById('progress-title').textContent = 'Regenerating with your answers...';
+
+  await fetch(`/answer/${jobId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answers }),
+  });
+
+  streamProgress(jobId);
 }
 
 // ── Error banner ─────────────────────────────────────────

@@ -125,27 +125,52 @@ def run_build(job_id, sources, max_videos, raw_text):
         if not skill_result:
             raise ValueError("Could not parse Claude response as JSON")
 
-        # Save skill to temp dir
-        tmpdir = Path(tempfile.mkdtemp())
-        skill_dir = save_skill(skill_result, tmpdir)
+        # If Claude flagged unresolvable contradictions, pause for user input
+        questions = skill_result.get("questions", [])
+        if questions:
+            log(f"Found {len(questions)} conflict(s) that need your input", "warn")
+            jobs[job_id].update({
+                "status": "needs_input",
+                "result": skill_result,
+                "questions": questions,
+                "combined_content": combined,
+                "source_title": source_title,
+                "source_url": source_url,
+            })
+            q.put({"type": "needs_input", "questions": questions})
+            return  # Wait for user answers via /answer endpoint
 
-        # Build zip
-        zip_path = tmpdir / f"{skill_result['skill_name']}.zip"
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file in skill_dir.rglob("*"):
-                if file.is_file():
-                    zf.write(file, file.relative_to(tmpdir))
+        # No questions — save and finish
+        _finalize_skill(job_id, skill_result, q)
 
-        jobs[job_id].update({
-            "status": "done",
-            "result": skill_result,
-            "zip_path": str(zip_path),
-            "skill_dir": str(skill_dir),
-            "skill_name": skill_result["skill_name"],
-        })
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        log(f"Error: {e}", "error")
+        q.put({"type": "complete", "skill_name": None})
 
-        log(f"Skill '{skill_result['skill_name']}' ready!", "success")
-        q.put({"type": "complete", "skill_name": skill_result["skill_name"]})
+
+def _finalize_skill(job_id, skill_result, q):
+    """Save skill to disk, build zip, mark done."""
+    tmpdir = Path(tempfile.mkdtemp())
+    skill_dir = save_skill(skill_result, tmpdir)
+
+    zip_path = tmpdir / f"{skill_result['skill_name']}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file in skill_dir.rglob("*"):
+            if file.is_file():
+                zf.write(file, file.relative_to(tmpdir))
+
+    jobs[job_id].update({
+        "status": "done",
+        "result": skill_result,
+        "zip_path": str(zip_path),
+        "skill_dir": str(skill_dir),
+        "skill_name": skill_result["skill_name"],
+    })
+
+    q = jobs[job_id]["queue"]
+    q.put({"type": "complete", "skill_name": skill_result["skill_name"]})
 
     except Exception as e:
         jobs[job_id]["status"] = "error"
@@ -233,8 +258,76 @@ def result(job_id):
         "skill_md": job.get("result", {}).get("skill_md") if job.get("result") else None,
         "sources_md": job.get("result", {}).get("sources_md") if job.get("result") else None,
         "summary": job.get("result", {}).get("summary") if job.get("result") else None,
+        "questions": job.get("questions", []),
         "error": job.get("error"),
     })
+
+
+@app.route("/answer/<job_id>", methods=["POST"])
+def answer(job_id):
+    """Receive user answers to contradiction questions, regenerate skill with context."""
+    job = jobs.get(job_id)
+    if not job or job["status"] != "needs_input":
+        return jsonify({"error": "Job not in needs_input state"}), 400
+
+    answers = request.json.get("answers", [])  # [{question, answer}]
+
+    # Build answers context string
+    answers_text = "\n".join(
+        f"Q: {a['question']}\nA: {a['answer']}" for a in answers
+    )
+
+    # Re-run generation with answers injected
+    job["status"] = "running"
+    job["questions"] = []
+
+    def regenerate():
+        q = job["queue"]
+        try:
+            from generate_skill import SYSTEM_PROMPT, build_user_message, read_knowledge_base
+            import anthropic
+
+            q.put({"type": "info", "message": "Regenerating skill with your answers..."})
+            best_practices, lessons, sources_catalog = read_knowledge_base()
+
+            # Inject answers into the user message
+            base_msg = build_user_message(
+                job["combined_content"], job["source_title"], job["source_url"],
+                best_practices, lessons, sources_catalog,
+            )
+            msg_with_answers = base_msg + f"\n\n## User Answers to Contradictions\n{answers_text}\n\nApply these answers when resolving the conflicts you identified."
+
+            client = anthropic.Anthropic()
+            message = client.messages.create(
+                model="claude-opus-4-6",
+                max_tokens=6000,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": msg_with_answers}],
+            )
+            raw = message.content[0].text.strip()
+            try:
+                skill_result = json.loads(raw)
+            except json.JSONDecodeError:
+                m = re.search(r"\{[\s\S]+\}", raw)
+                skill_result = json.loads(m.group(0)) if m else None
+            if not skill_result:
+                raise ValueError("Could not parse regenerated skill")
+
+            job["result"] = skill_result
+            q.put({"type": "success", "message": f"Skill updated with your answers"})
+            _finalize_skill(job_id, skill_result, q)
+
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = str(e)
+            q.put({"type": "error", "message": str(e)})
+            q.put({"type": "complete", "skill_name": None})
+
+    t = threading.Thread(target=regenerate)
+    t.daemon = True
+    t.start()
+
+    return jsonify({"ok": True})
 
 
 @app.route("/download/<job_id>/<file_type>")

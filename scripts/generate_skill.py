@@ -117,14 +117,51 @@ before executing complex tasks.
 
 ---
 
+## Contradiction Handling
+
+When sources disagree, resolve contradictions using this priority order — work through
+each rule before escalating to the user:
+
+1. **More recent beats older** — if a newer video/article contradicts an older one on a
+   fast-moving topic (frameworks, APIs, tools), prefer the newer source. Note it briefly.
+
+2. **More specific beats more general** — a tutorial about exactly this use case beats
+   a general overview that happens to mention it.
+
+3. **Consensus beats outlier** — if 4 sources agree and 1 disagrees, follow the consensus
+   and note the dissent exists.
+
+4. **Practical beats theoretical** — if one source shows a working implementation and
+   another describes a different approach theoretically, prefer the one that's been shown
+   to work.
+
+5. **Escalate only when genuinely unresolvable** — if two credible, recent, specific
+   sources directly contradict each other on something important AND none of the above
+   rules break the tie, flag it as a question for the user. Keep it to the most important
+   conflicts only — don't ask about minor style differences.
+
+For any contradiction you resolve automatically, add a brief note in `references/notes.md`
+explaining what disagreed and why you chose what you chose. This builds a transparent
+audit trail.
+
+For conflicts you escalate, add them to the "questions" key in your JSON output so the
+app can surface them to the user before finalizing the skill.
+
+---
+
 ## Your output
 
 Return a JSON object with these keys:
 - "skill_name": kebab-case identifier
 - "skill_md": full text of SKILL.md (including frontmatter)
 - "sources_md": full text of references/sources.md
-- "notes_md": full text of references/notes.md (or null if not needed)
+- "notes_md": full text of references/notes.md — REQUIRED if any contradictions were found, null otherwise
 - "summary": 2-3 sentences describing what you built and what makes it strong
+- "questions": list of strings — unresolvable contradictions that need user input, or [] if none.
+  Keep this list short. Only include conflicts that genuinely change what the skill should recommend.
+  Frame each question so a non-expert can answer it — e.g. "Two instructors disagree on X:
+  [Person A] says do Y because [reason]. [Person B] says do Z because [reason]. Which approach
+  should this skill follow?" Give a recommended default so the user can just say "go with your recommendation."
 
 Output ONLY valid JSON. No markdown fences, no preamble.
 """
