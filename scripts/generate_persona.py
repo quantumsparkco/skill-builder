@@ -134,19 +134,23 @@ Instructions:
 """
 
 
-def generate_persona(content, source_title, source_url):
+def generate_persona(content, source_title, source_url, intention=""):
     MAX = 55_000
     if len(content) > MAX:
         content = content[:MAX] + "\n\n[...truncated...]"
 
     client = anthropic.Anthropic()
+    msg = build_persona_message(content, source_title, source_url)
+    if intention:
+        msg += f"\n\n**User's Intention:** {intention}\nPrioritize topics, mental models, and positions that serve this goal."
+
     message = client.messages.create(
         model="claude-opus-4-6",
         max_tokens=8000,
         system=SYSTEM_PROMPT,
         messages=[{
             "role": "user",
-            "content": build_persona_message(content, source_title, source_url),
+            "content": msg,
         }],
     )
 

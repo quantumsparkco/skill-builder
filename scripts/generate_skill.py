@@ -167,8 +167,9 @@ Output ONLY valid JSON. No markdown fences, no preamble.
 """
 
 
-def build_user_message(content, source_title, source_url, best_practices, lessons, sources_catalog):
+def build_user_message(content, source_title, source_url, best_practices, lessons, sources_catalog, intention=""):
     today = date.today().isoformat()
+    intention_block = f"\n**User's Intention:** {intention}\nShape the skill around this goal — prioritize content, examples, and recommendations that serve it directly.\n" if intention else ""
     return f"""## Knowledge Base — Read This First
 
 ### Current Best Practices
@@ -189,7 +190,7 @@ Build a Claude Code skill from this content.
 **Source:** {source_title}
 **URL:** {source_url or 'N/A'}
 **Date:** {today}
-
+{intention_block}
 **Content:**
 \"\"\"
 {content}

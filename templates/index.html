@@ -430,8 +430,14 @@
     </div>
   </div>
 
-  <!-- Options + Build -->
+  <!-- Intention + Options + Build -->
   <div class="card" style="padding:16px 22px;margin-bottom:14px;">
+    <!-- Intention -->
+    <div style="margin-bottom:14px;">
+      <span class="field-label">Your intention <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-3);font-size:11px;">(optional — shapes what Claude focuses on)</span></span>
+      <textarea id="intention-input" rows="2"
+        placeholder="e.g. I run a 7-figure Amazon brand. I want this skill to help me audit PPC campaigns — focus on TACoS, search term harvesting, and bid adjustments."></textarea>
+    </div>
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
       <div id="max-videos-wrap" style="display:flex;align-items:center;gap:10px;">
         <span class="field-label" style="margin:0;white-space:nowrap;">Max videos</span>
@@ -441,6 +447,9 @@
       </div>
       <div style="flex:1;display:flex;justify-content:flex-end;gap:8px;align-items:center;">
         <span id="source-count" style="font-size:12px;color:var(--text-3);"></span>
+        <button class="btn-ghost" id="stop-btn" onclick="stopBuild()" style="display:none;color:var(--error);border-color:rgba(255,107,129,0.3);">
+          ✕&nbsp; Stop
+        </button>
         <button class="btn-primary" id="build-btn" onclick="startBuild()">
           ⚡&nbsp; Build Skill
         </button>
@@ -770,8 +779,11 @@ function updateCount() {
 }
 
 // ── Build ─────────────────────────────────────────────────
+let currentEventSource = null;
+
 async function startBuild() {
   const rawText   = document.getElementById('paste-input').value.trim();
+  const intention = document.getElementById('intention-input').value.trim();
   const maxVideos = parseInt(document.getElementById('max-videos').value) || 50;
 
   if (!urls.length && !files.length && !rawText) {
@@ -788,6 +800,7 @@ async function startBuild() {
   document.getElementById('progress-title').textContent =
     currentMode === 'persona' ? 'Building persona...' : 'Building skill...';
   document.getElementById('build-btn').disabled = true;
+  document.getElementById('stop-btn').style.display = 'inline-flex';
 
   const endpoint = currentMode === 'persona' ? '/build-persona' : '/build';
 
@@ -799,41 +812,60 @@ async function startBuild() {
         sources: urls.map(u => u.url),
         max_videos: maxVideos,
         raw_text: rawText,
+        intention,
         files,
       }),
     });
     const data = await res.json();
-    if (!res.ok) { showError(data.error || 'Build failed'); document.getElementById('build-btn').disabled = false; return; }
+    if (!res.ok) { showError(data.error || 'Build failed'); resetBuildUI(); return; }
     currentJobId = data.job_id;
     streamProgress(data.job_id);
   } catch(e) {
     showError('Request failed: ' + e.message);
-    document.getElementById('build-btn').disabled = false;
+    resetBuildUI();
   }
+}
+
+async function stopBuild() {
+  if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
+  if (currentJobId) {
+    await fetch('/cancel/' + currentJobId, { method: 'POST' });
+  }
+  document.getElementById('progress-spinner').style.display = 'none';
+  document.getElementById('progress-title').textContent = 'Stopped';
+  addLog('Build stopped by user.', 'error');
+  resetBuildUI();
+}
+
+function resetBuildUI() {
+  document.getElementById('build-btn').disabled = false;
+  document.getElementById('stop-btn').style.display = 'none';
 }
 
 function streamProgress(jobId) {
   const es = new EventSource('/stream/' + jobId);
+  currentEventSource = es;
   es.onmessage = e => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'ping') return;
     if (msg.type === 'needs_input') {
-      es.close();
+      es.close(); currentEventSource = null;
       showQuestions(msg.questions, jobId);
+      resetBuildUI();
       return;
     }
     if (msg.type === 'complete') {
-      es.close();
+      es.close(); currentEventSource = null;
+      resetBuildUI();
       msg.skill_name ? loadResult(jobId) : (() => {
         document.getElementById('progress-spinner').style.display = 'none';
         document.getElementById('progress-title').textContent = 'Build failed';
-        document.getElementById('build-btn').disabled = false;
       })();
       return;
     }
     addLog(msg.message, msg.type);
   };
-  es.onerror = () => { es.close(); document.getElementById('build-btn').disabled = false; };
+  es.onerror = () => { es.close(); currentEventSource = null; resetBuildUI(); };
 }
 
 function addLog(message, kind) {

@@ -32,7 +32,7 @@ jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, 
 # Background build worker
 # ──────────────────────────────────────────────
 
-def run_build(job_id, sources, max_videos, raw_text):
+def run_build(job_id, sources, max_videos, raw_text, intention=""):
     q = jobs[job_id]["queue"]
 
     def log(msg, kind="info"):
@@ -47,6 +47,8 @@ def run_build(job_id, sources, max_videos, raw_text):
 
         # Process each URL
         for url in sources:
+            if jobs[job_id].get("cancelled"):
+                return
             log(f"Fetching: {url}")
             try:
                 result = fetch(url, max_videos=max_videos, verbose=False)
@@ -98,6 +100,9 @@ def run_build(job_id, sources, max_videos, raw_text):
             log(f"Content truncated to {MAX:,} chars for processing")
             combined = combined[:MAX] + "\n\n[...truncated...]"
 
+        if jobs[job_id].get("cancelled"):
+            return
+
         log("Loading knowledge base...")
         best_practices, lessons, sources_catalog = read_knowledge_base()
 
@@ -112,6 +117,7 @@ def run_build(job_id, sources, max_videos, raw_text):
                 "content": build_user_message(
                     combined, source_title, source_url,
                     best_practices, lessons, sources_catalog,
+                    intention=intention,
                 ),
             }],
         )
@@ -178,7 +184,7 @@ def _finalize_skill(job_id, skill_result, q):
 # Persona background worker
 # ──────────────────────────────────────────────
 
-def run_build_persona(job_id, sources, max_videos, raw_text):
+def run_build_persona(job_id, sources, max_videos, raw_text, intention=""):
     q = jobs[job_id]["queue"]
 
     def log(msg, kind="info"):
@@ -191,6 +197,8 @@ def run_build_persona(job_id, sources, max_videos, raw_text):
         all_parts = []
 
         for url in sources:
+            if jobs[job_id].get("cancelled"):
+                return
             log(f"Fetching: {url}")
             try:
                 result = fetch(url, max_videos=max_videos, verbose=False)
@@ -219,6 +227,9 @@ def run_build_persona(job_id, sources, max_videos, raw_text):
         if not all_parts:
             raise ValueError("No content was successfully fetched. Check URLs and try again.")
 
+        if jobs[job_id].get("cancelled"):
+            return
+
         if len(all_parts) == 1:
             combined = all_parts[0]["content"]
             source_title = all_parts[0]["title"]
@@ -235,7 +246,7 @@ def run_build_persona(job_id, sources, max_videos, raw_text):
             source_url = sources[0] if sources else ""
 
         log("Generating persona with Claude Opus 4.6...")
-        result = generate_persona(combined, source_title, source_url)
+        result = generate_persona(combined, source_title, source_url, intention=intention)
 
         persona_name = result["persona_name"]
         jobs[job_id].update({
@@ -274,6 +285,7 @@ def build():
     data = request.json
     sources = [s.strip() for s in data.get("sources", []) if s.strip()]
     raw_text = data.get("raw_text", "").strip()
+    intention = data.get("intention", "").strip()
     max_videos = int(data.get("max_videos", 50))
     files = data.get("files", [])  # [{name, content}]
 
@@ -293,9 +305,10 @@ def build():
         "queue": queue.Queue(),
         "result": None, "zip_path": None,
         "skill_dir": None, "skill_name": None, "error": None,
+        "cancelled": False,
     }
 
-    t = threading.Thread(target=run_build, args=(job_id, sources, max_videos, raw_text))
+    t = threading.Thread(target=run_build, args=(job_id, sources, max_videos, raw_text, intention))
     t.daemon = True
     t.start()
 
@@ -310,6 +323,7 @@ def build_persona_route():
     data = request.json
     sources = [s.strip() for s in data.get("sources", []) if s.strip()]
     raw_text = data.get("raw_text", "").strip()
+    intention = data.get("intention", "").strip()
     max_videos = int(data.get("max_videos", 50))
     files = data.get("files", [])
 
@@ -329,9 +343,10 @@ def build_persona_route():
         "result": None, "zip_path": None,
         "skill_dir": None, "skill_name": None, "error": None,
         "job_type": "persona",
+        "cancelled": False,
     }
 
-    t = threading.Thread(target=run_build_persona, args=(job_id, sources, max_videos, raw_text))
+    t = threading.Thread(target=run_build_persona, args=(job_id, sources, max_videos, raw_text, intention))
     t.daemon = True
     t.start()
 
@@ -447,6 +462,15 @@ def answer(job_id):
     t.daemon = True
     t.start()
 
+    return jsonify({"ok": True})
+
+
+@app.route("/cancel/<job_id>", methods=["POST"])
+def cancel(job_id):
+    job = jobs.get(job_id)
+    if job:
+        job["cancelled"] = True
+        job["status"] = "cancelled"
     return jsonify({"ok": True})
 
 
