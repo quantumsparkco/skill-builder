@@ -502,6 +502,48 @@
     <!-- Install banner -->
     <div id="install-banner" style="display:none;margin-top:14px;
       border-radius:9px;padding:12px 14px;font-size:13px;"></div>
+
+    <hr style="margin:20px 0;">
+
+    <!-- What to do next -->
+    <div>
+      <h3 style="font-family:var(--font-head);font-size:14px;font-weight:600;letter-spacing:-0.02em;margin-bottom:12px;color:var(--text-2);text-transform:uppercase;font-size:11px;letter-spacing:0.06em;">What to do next</h3>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:22px;height:22px;border-radius:6px;background:rgba(107,79,232,0.2);color:var(--brand-300);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">1</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Download the .zip</p>
+            <p style="font-size:12px;color:var(--text-2);">Contains your SKILL.md and supporting reference files.</p>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:22px;height:22px;border-radius:6px;background:rgba(107,79,232,0.2);color:var(--brand-300);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">2</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Move the folder to <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">~/.claude/skills/</code></p>
+            <p style="font-size:12px;color:var(--text-2);">On Mac: open Finder → Go → Go to Folder → paste <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">~/.claude/skills/</code> → drop the unzipped folder in.</p>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:22px;height:22px;border-radius:6px;background:rgba(107,79,232,0.2);color:var(--brand-300);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">3</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Restart Claude Code in VS Code</p>
+            <p style="font-size:12px;color:var(--text-2);">Close and reopen the Claude Code panel — it picks up new skills on startup.</p>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:22px;height:22px;border-radius:6px;background:rgba(29,233,182,0.15);color:var(--success);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">✓</div>
+          <div>
+            <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Start using it</p>
+            <p style="font-size:12px;color:var(--text-2);">Just describe what you want to do in Claude Code — it will automatically invoke the skill when relevant. You can also say <em>"use my <span id="next-skill-name" style="font-family:var(--font-mono);font-size:11px;"></span> skill"</em> to trigger it directly.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
   </div>
 
 </div><!-- end layout -->
@@ -704,8 +746,9 @@ async function loadResult(jobId) {
   }
   document.getElementById('progress-spinner').style.display = 'none';
   document.getElementById('progress-title').textContent = `Done — ${data.skill_name}`;
-  document.getElementById('output-title').textContent   = data.skill_name;
-  document.getElementById('output-summary').textContent = data.summary || '';
+  document.getElementById('output-title').textContent    = data.skill_name;
+  document.getElementById('output-summary').textContent  = data.summary || '';
+  document.getElementById('next-skill-name').textContent = data.skill_name;
   document.getElementById('preview-skill').textContent   = data.skill_md   || '';
   document.getElementById('preview-sources').textContent = data.sources_md || '';
   document.getElementById('output-card').style.display  = 'block';
