@@ -58,6 +58,13 @@ def classify_youtube_url(url):
 # Video list extraction via yt-dlp
 # ──────────────────────────────────────────────
 
+def _is_channel_url(url):
+    """Return True if the URL points to a channel (not a playlist or single video)."""
+    return bool(re.search(
+        r"youtube\.com/(@|c/|user/|channel/)", url
+    )) and "list=" not in url and "watch" not in url
+
+
 def get_video_list(url, max_videos=50, verbose=True):
     """
     Extract a list of video dicts from any YouTube URL.
@@ -70,6 +77,14 @@ def get_video_list(url, max_videos=50, verbose=True):
     if verbose:
         print(f"  Scanning for videos (max {max_videos})...", flush=True)
 
+    # Channel URLs must use the /videos tab — otherwise yt-dlp returns tab entries
+    # (e.g. "Channel - Videos", "Channel - Live", "Channel - Shorts") not actual videos.
+    fetch_url = url
+    if _is_channel_url(url):
+        base = url.rstrip("/")
+        if not base.endswith("/videos"):
+            fetch_url = base + "/videos"
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -78,16 +93,20 @@ def get_video_list(url, max_videos=50, verbose=True):
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        info = ydl.extract_info(fetch_url, download=False)
 
     if not info:
         return []
 
     if "entries" in info:
-        entries = [e for e in info["entries"] if e and e.get("id")]
+        entries = [e for e in info["entries"] if e and e.get("id")
+                   and len(e.get("id", "")) == 11]  # real video IDs are exactly 11 chars
         return [{"id": e["id"], "title": e.get("title", "Untitled"), "description": e.get("description") or ""} for e in entries]
 
-    return [{"id": info["id"], "title": info.get("title", "Untitled"), "description": info.get("description") or ""}]
+    vid_id = info.get("id", "")
+    if len(vid_id) != 11:
+        return []
+    return [{"id": vid_id, "title": info.get("title", "Untitled"), "description": info.get("description") or ""}]
 
 
 _STOP_WORDS = {
@@ -143,12 +162,40 @@ def get_transcript_text(video_id, verbose=False):
     Fall back to yt-dlp auto-subtitle extraction.
     Returns (text, method) or (None, reason).
     """
-    # Method 1: youtube-transcript-api
+    # Method 1: youtube-transcript-api — try any available transcript
     if TRANSCRIPT_API:
         try:
-            entries = YouTubeTranscriptApi.get_transcript(video_id)
-            text = " ".join(e["text"] for e in entries)
-            return text, "transcript-api"
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+            # Priority: manually created English > auto-generated English > any manual > any auto
+            transcript = None
+            for lang in ["en", "en-US", "en-GB"]:
+                try:
+                    transcript = transcript_list.find_manually_created_transcript([lang])
+                    break
+                except Exception:
+                    pass
+            if transcript is None:
+                for lang in ["en", "en-US", "en-GB"]:
+                    try:
+                        transcript = transcript_list.find_generated_transcript([lang])
+                        break
+                    except Exception:
+                        pass
+            if transcript is None:
+                # Take whatever is first available (may need translation)
+                for t in transcript_list:
+                    transcript = t
+                    break
+
+            if transcript is not None:
+                entries = transcript.fetch()
+                # Handle both dict-style (older API) and attribute-style (newer API) entries
+                def _text(e):
+                    return e["text"] if isinstance(e, dict) else e.text
+                text = " ".join(_text(e) for e in entries)
+                return text, "transcript-api"
+
         except (TranscriptsDisabled, NoTranscriptFound):
             pass
         except Exception as e:

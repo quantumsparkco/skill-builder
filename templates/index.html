@@ -424,9 +424,17 @@
 
     <!-- PASTE TAB -->
     <div id="tab-paste" class="tab-panel">
-      <span class="field-label">Paste Content</span>
-      <textarea id="paste-input" rows="9"
-        placeholder="Paste a transcript, course notes, documentation, or any text you want to distill into a skill..."></textarea>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;">
+        <span class="field-label" style="margin:0;">Paste Content</span>
+        <span id="paste-char-count" style="font-size:11px;color:var(--text-3);"></span>
+      </div>
+      <p style="font-size:11.5px;color:var(--text-3);margin-bottom:8px;">
+        YouTube transcript · course notes · article · documentation · any text
+        &nbsp;·&nbsp; <strong style="color:var(--text-2);">Tip:</strong> On any YouTube video, click ··· → <em>Show transcript</em> → select all → copy
+      </p>
+      <textarea id="paste-input" rows="10"
+        oninput="updatePasteCount()"
+        placeholder="Paste content here — YouTube transcript, article, notes, or any text you want to turn into a skill or persona..."></textarea>
     </div>
   </div>
 
@@ -866,6 +874,12 @@ function updateCount() {
   const n = urls.length + files.length;
   const el = document.getElementById('source-count');
   el.textContent = n > 0 ? `${n} source${n > 1 ? 's' : ''} queued` : '';
+}
+
+function updatePasteCount() {
+  const len = document.getElementById('paste-input').value.length;
+  const el  = document.getElementById('paste-char-count');
+  el.textContent = len > 0 ? `${len.toLocaleString()} chars` : '';
 }
 
 // ── Build ─────────────────────────────────────────────────
