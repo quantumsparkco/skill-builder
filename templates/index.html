@@ -443,7 +443,9 @@
     <!-- Intention -->
     <div style="margin-bottom:14px;">
       <span class="field-label">Your intention <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-3);font-size:11px;">(optional — shapes what Claude focuses on)</span></span>
-      <textarea id="intention-input" rows="2"
+      <textarea id="intention-input" rows="3"
+        oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"
+        style="overflow:hidden;min-height:64px;"
         placeholder="e.g. I run a 7-figure Amazon brand. I want this skill to help me audit PPC campaigns — focus on TACoS, search term harvesting, and bid adjustments."></textarea>
     </div>
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
