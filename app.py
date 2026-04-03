@@ -553,6 +553,79 @@ def answer(job_id):
     return jsonify({"ok": True})
 
 
+@app.route("/append/<job_id>", methods=["POST"])
+def append_source(job_id):
+    """Fetch a new URL and merge it into an existing skill."""
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done" or job.get("job_type") == "persona":
+        return jsonify({"error": "No completed skill found for this session."}), 400
+
+    data = request.json
+    url = data.get("url", "").strip()
+    max_videos = int(data.get("max_videos", 50))
+    if not url:
+        return jsonify({"error": "No URL provided."}), 400
+
+    try:
+        from fetch_content import fetch
+
+        result = fetch(url, max_videos=max_videos, verbose=False)
+        new_content = result["content"]
+        source_title = result["title"]
+
+        MAX = 40_000
+        if len(new_content) > MAX:
+            new_content = new_content[:MAX] + "\n\n[...truncated...]"
+
+        existing_skill_md = job["result"]["skill_md"]
+
+        import anthropic, re as _re
+        APPEND_PROMPT = """\
+You are updating an existing Claude Code skill with new content.
+
+Your job:
+1. Identify genuinely new information, techniques, or updated recommendations in the new content
+2. Update the existing skill to incorporate it — revise sections, add bullets, update examples
+3. Do NOT bloat the skill — remove outdated information if the new content supersedes it
+4. Keep the skill under 400 lines
+5. Return the complete updated SKILL.md text only — no JSON, no preamble
+
+If the new content adds nothing meaningful, return the existing skill unchanged.
+"""
+        client = anthropic.Anthropic()
+        msg = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=6000,
+            system=APPEND_PROMPT,
+            messages=[{"role": "user", "content":
+                f"## Existing SKILL.md\n\n{existing_skill_md}\n\n"
+                f"---\n\n## New Content from: {source_title}\nURL: {url}\n\n{new_content}"
+            }],
+        )
+        updated_skill_md = msg.content[0].text.strip()
+
+        # Update in-memory result
+        job["result"]["skill_md"] = updated_skill_md
+
+        # Rebuild zip with updated skill
+        from generate_skill import save_skill
+        tmpdir = Path(tempfile.mkdtemp())
+        skill_result = dict(job["result"])
+        skill_dir = save_skill(skill_result, tmpdir)
+        zip_path = tmpdir / f"{job['skill_name']}.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file in skill_dir.rglob("*"):
+                if file.is_file():
+                    zf.write(file, file.relative_to(tmpdir))
+        job["zip_path"] = str(zip_path)
+        job["skill_dir"] = str(skill_dir)
+
+        return jsonify({"skill_md": updated_skill_md})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/cancel/<job_id>", methods=["POST"])
 def cancel(job_id):
     job = jobs.get(job_id)
