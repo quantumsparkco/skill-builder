@@ -528,6 +528,20 @@
       </div>
     </div>
 
+    <!-- Recurring sources banner (shown only if any sources have a schedule) -->
+    <div id="recurring-banner" style="display:none;margin-bottom:14px;
+      background:rgba(29,233,182,0.07);border:1px solid rgba(29,233,182,0.2);
+      border-radius:10px;padding:12px 16px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span style="font-size:15px;">🔄</span>
+        <span style="font-size:13px;font-weight:600;color:var(--success);">Auto-updates enabled</span>
+      </div>
+      <div id="recurring-sources-list" style="display:flex;flex-direction:column;gap:4px;"></div>
+      <p style="font-size:11.5px;color:var(--text-3);margin-top:8px;">
+        Run <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">python3 ~/.claude/skill-updater.py</code> to check for updates, or install the weekly scheduler with <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">--install</code>.
+      </p>
+    </div>
+
     <hr style="margin-bottom:16px;">
 
     <!-- Download + Install row -->
@@ -663,7 +677,7 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────
-let urls  = [];   // [{url, type}]
+let urls  = [];   // [{url, type, schedule}]  schedule: null|'weekly'|'monthly'
 let files = [];   // [{name, content}]
 let currentJobId = null;
 let currentMode  = 'skill'; // 'skill' | 'persona'
@@ -816,15 +830,32 @@ function removeUrl(url) {
   renderUrls(); updateCount();
 }
 
+function cycleSchedule(url) {
+  const entry = urls.find(u => u.url === url);
+  if (!entry) return;
+  const cycle = [null, 'weekly', 'monthly'];
+  const idx = cycle.indexOf(entry.schedule);
+  entry.schedule = cycle[(idx + 1) % cycle.length];
+  renderUrls();
+}
+
 function renderUrls() {
   const list = document.getElementById('url-list');
   list.innerHTML = '';
-  urls.forEach(({ url, type }) => {
+  urls.forEach(({ url, type, schedule }) => {
+    const schedLabel = schedule ? `🔄 ${schedule}` : '🔄 once';
+    const schedColor = schedule ? 'var(--success)' : 'var(--text-3)';
     const d = document.createElement('div');
     d.className = 'pill';
     d.innerHTML = `
       <span class="pill-badge badge-${type}">${type}</span>
       <span class="pill-text" title="${url}">${url}</span>
+      <button onclick="cycleSchedule(${JSON.stringify(url)})"
+        title="Toggle recurring update schedule"
+        style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:600;
+               color:${schedColor};white-space:nowrap;padding:2px 6px;border-radius:5px;
+               border:1px solid ${schedule ? 'rgba(29,233,182,0.3)' : 'var(--border)'};
+               transition:all 0.15s;">${schedLabel}</button>
       <button class="pill-remove" onclick="removeUrl(${JSON.stringify(url)})" aria-label="Remove">×</button>`;
     list.appendChild(d);
   });
@@ -921,6 +952,7 @@ async function startBuild() {
         raw_text: rawText,
         intention,
         files,
+        watch_sources: urls.filter(u => u.schedule).map(u => ({ url: u.url, schedule: u.schedule })),
       }),
     });
     const data = await res.json();
@@ -1041,6 +1073,24 @@ async function loadResult(jobId) {
     document.getElementById('next-skill-name').textContent = data.skill_name;
     document.getElementById('preview-skill').textContent   = data.skill_md   || '';
     document.getElementById('preview-sources').textContent = data.sources_md || '';
+
+    // Show recurring banner if any sources had a schedule
+    const watchSources = urls.filter(u => u.schedule);
+    const banner = document.getElementById('recurring-banner');
+    const sourcesList = document.getElementById('recurring-sources-list');
+    if (watchSources.length > 0) {
+      sourcesList.innerHTML = watchSources.map(s =>
+        `<div style="display:flex;align-items:center;gap:8px;font-size:12px;">
+          <span style="color:var(--success);font-size:10px;">●</span>
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--text);">${s.url}</span>
+          <span style="color:var(--text-3);">— ${s.schedule}</span>
+        </div>`
+      ).join('');
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
+
     document.getElementById('output-card').style.display  = 'block';
     document.getElementById('output-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }

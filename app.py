@@ -161,13 +161,58 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         q.put({"type": "complete", "skill_name": None})
 
 
+def _write_watchlist(target_dir: Path, sources: list, intention: str, target_type: str, name: str):
+    """Write watchlist.json and initial CHANGELOG.md if any sources have a schedule."""
+    from datetime import date as _date
+    recurring = [s for s in sources if s.get("schedule") and s["schedule"] != "never"]
+    watchlist = {
+        "name": name,
+        "type": target_type,
+        "intention": intention,
+        "sources": [
+            {
+                "url": s["url"],
+                "schedule": s.get("schedule", "never"),
+                "auto_accept": False,
+                "last_fetched": _date.today().isoformat(),
+            }
+            for s in sources
+        ],
+        "created": _date.today().isoformat(),
+        "last_updated": _date.today().isoformat(),
+    }
+    (target_dir / "watchlist.json").write_text(
+        json.dumps(watchlist, indent=2), encoding="utf-8"
+    )
+    # Initial changelog
+    cl = target_dir / "CHANGELOG.md"
+    source_lines = "\n".join(
+        f"- {s['url']}" + (f" ({s['schedule']})" if s.get("schedule") and s["schedule"] != "never" else "")
+        for s in sources
+    )
+    cl.write_text(
+        f"# {name} — Changelog\n\n"
+        f"## {_date.today().isoformat()} (created)\n"
+        f"Initial build from:\n{source_lines}\n",
+        encoding="utf-8",
+    )
+
+
 def _finalize_skill(job_id, skill_result, q):
     """Save skill to disk, build zip, mark done."""
     from generate_skill import save_skill
     tmpdir = Path(tempfile.mkdtemp())
     skill_dir = save_skill(skill_result, tmpdir)
 
-    zip_path = tmpdir / f"{skill_result['skill_name']}.zip"
+    # Write watchlist.json + CHANGELOG.md if recurring sources exist
+    job = jobs[job_id]
+    watch_sources = job.get("watch_sources", [])
+    intention = job.get("intention", "")
+    skill_name = skill_result["skill_name"]
+    if watch_sources:
+        _write_watchlist(skill_dir, watch_sources, intention, "skill", skill_name)
+
+    zip_path = tmpdir / f"{skill_name}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in skill_dir.rglob("*"):
             if file.is_file():
@@ -178,11 +223,11 @@ def _finalize_skill(job_id, skill_result, q):
         "result": skill_result,
         "zip_path": str(zip_path),
         "skill_dir": str(skill_dir),
-        "skill_name": skill_result["skill_name"],
+        "skill_name": skill_name,
     })
 
     q = jobs[job_id]["queue"]
-    q.put({"type": "complete", "skill_name": skill_result["skill_name"]})
+    q.put({"type": "complete", "skill_name": skill_name})
 
 
 # ──────────────────────────────────────────────
@@ -259,10 +304,36 @@ def run_build_persona(job_id, sources, max_videos, raw_text, intention=""):
         result = generate_persona(combined, source_title, source_url, intention=intention)
 
         persona_name = result["persona_name"]
+
+        # Save persona to ~/.claude/personas/<slug>/
+        import re as _re
+        slug = _re.sub(r"[^a-z0-9]+", "-", persona_name.lower()).strip("-")
+        persona_root = Path.home() / ".claude" / "personas" / slug
+        persona_root.mkdir(parents=True, exist_ok=True)
+        persona_file = persona_root / f"{slug}.md"
+        persona_file.write_text(result["persona_md"], encoding="utf-8")
+
+        # Write watchlist + changelog if recurring sources
+        watch_sources = jobs[job_id].get("watch_sources", [])
+        intention_val = jobs[job_id].get("intention", "")
+        if watch_sources:
+            _write_watchlist(persona_root, watch_sources, intention_val, "persona", slug)
+        else:
+            # Always write a basic changelog
+            from datetime import date as _date
+            cl = persona_root / "CHANGELOG.md"
+            cl.write_text(
+                f"# {persona_name} — Changelog\n\n"
+                f"## {_date.today().isoformat()} (created)\n"
+                f"Initial build from: {source_url or source_title}\n",
+                encoding="utf-8",
+            )
+
         jobs[job_id].update({
             "status": "done",
             "result": result,
             "skill_name": persona_name,
+            "persona_dir": str(persona_root),
         })
         q.put({"type": "complete", "skill_name": persona_name})
 
@@ -298,6 +369,8 @@ def build():
     intention = data.get("intention", "").strip()
     max_videos = int(data.get("max_videos", 50))
     files = data.get("files", [])  # [{name, content}]
+    # watch_sources: [{url, schedule}] — sources with recurring schedules
+    watch_sources = data.get("watch_sources", [])
 
     # Merge uploaded file content into raw_text
     if files:
@@ -316,6 +389,8 @@ def build():
         "result": None, "zip_path": None,
         "skill_dir": None, "skill_name": None, "error": None,
         "cancelled": False,
+        "watch_sources": watch_sources,
+        "intention": intention,
     }
 
     t = threading.Thread(target=run_build, args=(job_id, sources, max_videos, raw_text, intention))
@@ -336,6 +411,7 @@ def build_persona_route():
     intention = data.get("intention", "").strip()
     max_videos = int(data.get("max_videos", 50))
     files = data.get("files", [])
+    watch_sources = data.get("watch_sources", [])
 
     if files:
         file_blocks = [f"# {f['name']}\n\n{f['content']}" for f in files]
@@ -354,6 +430,8 @@ def build_persona_route():
         "skill_dir": None, "skill_name": None, "error": None,
         "job_type": "persona",
         "cancelled": False,
+        "watch_sources": watch_sources,
+        "intention": intention,
     }
 
     t = threading.Thread(target=run_build_persona, args=(job_id, sources, max_videos, raw_text, intention))
