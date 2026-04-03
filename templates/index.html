@@ -603,6 +603,38 @@
           </div>
         </div>
 
+        <!-- Auto-update step — only shown if recurring sources were set -->
+        <div id="auto-update-step" style="display:none;flex-direction:column;gap:10px;">
+          <hr style="margin:4px 0;border-color:var(--border);">
+          <p style="font-size:11px;font-weight:700;letter-spacing:0.06em;color:var(--text-3);text-transform:uppercase;">Keep it current (one-time setup)</p>
+
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <div style="width:22px;height:22px;border-radius:6px;background:rgba(29,233,182,0.12);color:var(--success);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">A</div>
+            <div>
+              <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Download the updater script</p>
+              <p style="font-size:12px;color:var(--text-2);">Save <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">skill-updater.py</code> from the Skill Builder project to your Mac — put it anywhere permanent, e.g. <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">~/scripts/skill-updater.py</code>.</p>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <div style="width:22px;height:22px;border-radius:6px;background:rgba(29,233,182,0.12);color:var(--success);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">B</div>
+            <div>
+              <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Install the weekly scheduler (run once in Terminal)</p>
+              <div style="font-family:var(--font-mono);font-size:11.5px;background:var(--elevated);border:1px solid var(--border);border-radius:7px;padding:8px 12px;margin-top:4px;color:var(--text);word-break:break-all;">python3 ~/scripts/skill-updater.py --install</div>
+              <p style="font-size:12px;color:var(--text-2);margin-top:4px;">Runs every Monday at 9 AM automatically. All future skills you build with recurring sources are picked up with no extra setup.</p>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <div style="width:22px;height:22px;border-radius:6px;background:rgba(29,233,182,0.12);color:var(--success);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">C</div>
+            <div>
+              <p style="font-size:13px;font-weight:500;margin-bottom:2px;">Run it manually anytime</p>
+              <div style="font-family:var(--font-mono);font-size:11.5px;background:var(--elevated);border:1px solid var(--border);border-radius:7px;padding:8px 12px;margin-top:4px;color:var(--text);word-break:break-all;">python3 ~/scripts/skill-updater.py</div>
+              <p style="font-size:12px;color:var(--text-2);margin-top:4px;">Shows a summary of new content, asks you to accept or skip before updating. Type <code style="font-family:var(--font-mono);font-size:11px;background:var(--elevated);padding:1px 5px;border-radius:4px;">a</code> to always-accept a source and never be asked again.</p>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -1087,8 +1119,10 @@ async function loadResult(jobId) {
         </div>`
       ).join('');
       banner.style.display = 'block';
+      document.getElementById('auto-update-step').style.display = 'flex';
     } else {
       banner.style.display = 'none';
+      document.getElementById('auto-update-step').style.display = 'none';
     }
 
     document.getElementById('output-card').style.display  = 'block';
