@@ -889,19 +889,24 @@ function renderUrls() {
   const list = document.getElementById('url-list');
   list.innerHTML = '';
   urls.forEach(({ url, type, schedule }) => {
+    const canRecur = (type === 'channel' || type === 'playlist');
     const schedLabel = schedule ? `🔄 ${schedule}` : '🔄 once';
     const schedColor = schedule ? 'var(--success)' : 'var(--text-3)';
+    const schedBorder = schedule ? 'rgba(29,233,182,0.3)' : 'var(--border)';
+    const recurBtn = canRecur
+      ? `<button
+           title="Toggle recurring update schedule"
+           style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:600;
+                  color:${schedColor};white-space:nowrap;padding:2px 6px;border-radius:5px;
+                  border:1px solid ${schedBorder};transition:all 0.15s;"
+           onclick="cycleSchedule(${JSON.stringify(url)})">${schedLabel}</button>`
+      : '';
     const d = document.createElement('div');
     d.className = 'pill';
     d.innerHTML = `
       <span class="pill-badge badge-${type}">${type}</span>
       <span class="pill-text" title="${url}">${url}</span>
-      <button onclick="cycleSchedule(${JSON.stringify(url)})"
-        title="Toggle recurring update schedule"
-        style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:600;
-               color:${schedColor};white-space:nowrap;padding:2px 6px;border-radius:5px;
-               border:1px solid ${schedule ? 'rgba(29,233,182,0.3)' : 'var(--border)'};
-               transition:all 0.15s;">${schedLabel}</button>
+      ${recurBtn}
       <button class="pill-remove" onclick="removeUrl(${JSON.stringify(url)})" aria-label="Remove">×</button>`;
     list.appendChild(d);
   });
