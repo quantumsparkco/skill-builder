@@ -237,7 +237,7 @@
   .badge-playlist { background: rgba(249,199,79,0.15); color: var(--warn); }
   .badge-video    { background: rgba(29,233,182,0.15); color: var(--success); }
   .badge-web      { background: rgba(139,144,168,0.15); color: var(--text-2); }
-  .badge-file     { background: rgba(255,107,129,0.15); color: var(--error); }
+  .badge-file     { background: rgba(29,233,182,0.12); color: var(--success); }
 
   .pill-text {
     font-family: var(--font-mono);
@@ -976,7 +976,7 @@ function renderFiles() {
     const d = document.createElement('div');
     d.className = 'pill';
     d.innerHTML = `
-      <span class="pill-badge badge-file">file</span>
+      <span class="pill-badge badge-file">✓ file</span>
       <span class="pill-text">${name}</span>
       <span class="pill-meta">${(content.length/1000).toFixed(1)}k chars</span>
       <button class="pill-remove" onclick="removeFile(${JSON.stringify(name)})" aria-label="Remove">×</button>`;
