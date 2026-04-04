@@ -418,7 +418,9 @@
         <p style="font-family:var(--font-head);font-size:15px;font-weight:600;letter-spacing:-0.02em;margin-bottom:4px;">Drop files here</p>
         <p style="font-size:12px;color:var(--text-2);">or click to browse · .txt · .md · .pdf · .docx · .pptx</p>
       </div>
-      <input type="file" id="file-input" multiple accept=".txt,.md,.pdf,.docx,.pptx" style="display:none" onchange="handleFiles(this.files)">
+      <input type="file" id="file-input" multiple
+        accept=".txt,.md,.pdf,.docx,.pptx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        style="display:none" onchange="handleFiles(this.files)">
       <div id="file-list" style="display:flex;flex-direction:column;gap:6px;margin-top:10px;"></div>
     </div>
 
