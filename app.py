@@ -702,6 +702,62 @@ def parse_file():
                         parts.append(shape.text.strip())
             text = "\n\n".join(parts)
 
+        elif ext in (".xlsx", ".xls"):
+            import openpyxl, anthropic as _anthropic
+            wb = openpyxl.load_workbook(f, data_only=False)
+            sections = []
+            all_formulas = []
+
+            for sheet in wb.worksheets:
+                rows_text = []
+                sheet_formulas = []
+
+                for row in sheet.iter_rows():
+                    row_vals = []
+                    for cell in row:
+                        val = cell.value
+                        if val is None:
+                            row_vals.append("")
+                        elif isinstance(val, str) and val.startswith("="):
+                            placeholder = f"[FORMULA:{cell.coordinate}]"
+                            row_vals.append(placeholder)
+                            sheet_formulas.append({
+                                "cell": cell.coordinate,
+                                "formula": val,
+                                "sheet": sheet.title,
+                            })
+                        else:
+                            row_vals.append(str(val))
+                    # Skip fully empty rows
+                    if any(v for v in row_vals):
+                        rows_text.append(" | ".join(row_vals))
+
+                section = f"## Sheet: {sheet.title}\n" + "\n".join(rows_text)
+                sections.append(section)
+                all_formulas.extend(sheet_formulas)
+
+            raw_text = "\n\n".join(sections)
+
+            # Ask Claude to explain all formulas in one call
+            if all_formulas:
+                formula_list = "\n".join(
+                    f"- {f['sheet']}!{f['cell']}: {f['formula']}" for f in all_formulas
+                )
+                client = _anthropic.Anthropic()
+                msg = client.messages.create(
+                    model="claude-opus-4-6",
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content":
+                        f"Explain each of these spreadsheet formulas in plain English. "
+                        f"Be specific about what each one calculates and why it's useful. "
+                        f"Format as a list with the cell reference, then the explanation.\n\n{formula_list}"
+                    }],
+                )
+                formula_explanations = msg.content[0].text.strip()
+                text = raw_text + f"\n\n## Formula Explanations\n\n{formula_explanations}"
+            else:
+                text = raw_text
+
         else:
             return jsonify({"error": f"Unsupported file type: {ext}"}), 400
 

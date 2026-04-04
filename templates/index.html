@@ -416,10 +416,10 @@
         ondrop="handleDrop(event)">
         <div style="font-size:30px;margin-bottom:8px;">📄</div>
         <p style="font-family:var(--font-head);font-size:15px;font-weight:600;letter-spacing:-0.02em;margin-bottom:4px;">Drop files here</p>
-        <p style="font-size:12px;color:var(--text-2);">or click to browse · .txt · .md · .pdf · .docx · .pptx</p>
+        <p style="font-size:12px;color:var(--text-2);">or click to browse · .txt · .md · .pdf · .docx · .pptx · .xlsx</p>
       </div>
       <input type="file" id="file-input" multiple
-        accept=".txt,.md,.pdf,.docx,.pptx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        accept=".txt,.md,.pdf,.docx,.pptx,.xlsx,.xls,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         style="display:none" onchange="handleFiles(this.files)">
       <div id="file-list" style="display:flex;flex-direction:column;gap:6px;margin-top:10px;"></div>
     </div>
@@ -915,7 +915,7 @@ function renderUrls() {
 }
 
 // ── File handling ─────────────────────────────────────────
-const BINARY_EXTS = ['.docx', '.pptx', '.pdf'];
+const BINARY_EXTS = ['.docx', '.pptx', '.pdf', '.xlsx', '.xls'];
 
 function simpleHash(str) {
   let h = 0;
