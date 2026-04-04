@@ -882,7 +882,7 @@ function cycleSchedule(url) {
   const entry = urls.find(u => u.url === url);
   if (!entry) return;
   const cycle = [null, 'weekly', 'monthly'];
-  const idx = cycle.indexOf(entry.schedule);
+  const idx = cycle.indexOf(entry.schedule || null);
   entry.schedule = cycle[(idx + 1) % cycle.length];
   renderUrls();
 }
@@ -892,24 +892,43 @@ function renderUrls() {
   list.innerHTML = '';
   urls.forEach(({ url, type, schedule }) => {
     const canRecur = (type === 'channel' || type === 'playlist');
-    const schedLabel = schedule ? `🔄 ${schedule}` : '🔄 once';
-    const schedColor = schedule ? 'var(--success)' : 'var(--text-3)';
-    const schedBorder = schedule ? 'rgba(29,233,182,0.3)' : 'var(--border)';
-    const recurBtn = canRecur
-      ? `<button
-           title="Toggle recurring update schedule"
-           style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:600;
-                  color:${schedColor};white-space:nowrap;padding:2px 6px;border-radius:5px;
-                  border:1px solid ${schedBorder};transition:all 0.15s;"
-           onclick="cycleSchedule(${JSON.stringify(url)})">${schedLabel}</button>`
-      : '';
     const d = document.createElement('div');
     d.className = 'pill';
-    d.innerHTML = `
-      <span class="pill-badge badge-${type}">${type}</span>
-      <span class="pill-text" title="${url}">${url}</span>
-      ${recurBtn}
-      <button class="pill-remove" onclick="removeUrl(${JSON.stringify(url)})" aria-label="Remove">×</button>`;
+
+    const badge = document.createElement('span');
+    badge.className = `pill-badge badge-${type}`;
+    badge.textContent = type;
+
+    const label = document.createElement('span');
+    label.className = 'pill-text';
+    label.title = url;
+    label.textContent = url;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'pill-remove';
+    removeBtn.setAttribute('aria-label', 'Remove');
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => { removeUrl(url); });
+
+    d.appendChild(badge);
+    d.appendChild(label);
+
+    if (canRecur) {
+      const schedBtn = document.createElement('button');
+      const updateSchedBtn = () => {
+        const s = urls.find(u => u.url === url)?.schedule;
+        schedBtn.textContent = s ? `🔄 ${s}` : '🔄 once';
+        schedBtn.style.color = s ? 'var(--success)' : 'var(--text-3)';
+        schedBtn.style.borderColor = s ? 'rgba(29,233,182,0.3)' : 'var(--border)';
+      };
+      schedBtn.title = 'Toggle recurring update schedule';
+      schedBtn.style.cssText = 'background:none;border:1px solid;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap;padding:2px 6px;border-radius:5px;transition:all 0.15s;';
+      updateSchedBtn();
+      schedBtn.addEventListener('click', () => { cycleSchedule(url); });
+      d.appendChild(schedBtn);
+    }
+
+    d.appendChild(removeBtn);
     list.appendChild(d);
   });
 }
@@ -975,11 +994,29 @@ function renderFiles() {
   files.forEach(({ name, content }) => {
     const d = document.createElement('div');
     d.className = 'pill';
-    d.innerHTML = `
-      <span class="pill-badge badge-file">✓ file</span>
-      <span class="pill-text">${name}</span>
-      <span class="pill-meta">${(content.length/1000).toFixed(1)}k chars</span>
-      <button class="pill-remove" onclick="removeFile(${JSON.stringify(name)})" aria-label="Remove">×</button>`;
+
+    const badge = document.createElement('span');
+    badge.className = 'pill-badge badge-file';
+    badge.textContent = '✓ file';
+
+    const label = document.createElement('span');
+    label.className = 'pill-text';
+    label.textContent = name;
+
+    const meta = document.createElement('span');
+    meta.className = 'pill-meta';
+    meta.textContent = `${(content.length/1000).toFixed(1)}k chars`;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'pill-remove';
+    removeBtn.setAttribute('aria-label', 'Remove');
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => { removeFile(name); });
+
+    d.appendChild(badge);
+    d.appendChild(label);
+    d.appendChild(meta);
+    d.appendChild(removeBtn);
     list.appendChild(d);
   });
 }
