@@ -917,9 +917,18 @@ function renderUrls() {
 // ── File handling ─────────────────────────────────────────
 const BINARY_EXTS = ['.docx', '.pptx', '.pdf'];
 
+function simpleHash(str) {
+  let h = 0;
+  for (let i = 0; i < Math.min(str.length, 2000); i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
 async function handleFiles(fl) {
+  let skipped = 0;
   for (const f of fl) {
-    if (files.find(x => x.name === f.name)) continue;
+    if (files.find(x => x.name === f.name)) { skipped++; continue; }
     const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
     try {
       let content;
@@ -928,11 +937,14 @@ async function handleFiles(fl) {
       } else {
         content = await readFile(f);
       }
-      files.push({ name: f.name, content });
+      const hash = simpleHash(content);
+      if (files.find(x => x.hash === hash)) { skipped++; continue; }
+      files.push({ name: f.name, content, hash });
     } catch(e) {
       showError(`Could not read ${f.name}: ${e.message}`);
     }
   }
+  if (skipped > 0) showError(`${skipped} duplicate file${skipped > 1 ? 's' : ''} skipped.`);
   renderFiles(); updateCount();
 }
 
