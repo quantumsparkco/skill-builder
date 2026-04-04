@@ -683,8 +683,8 @@ def parse_file():
             text = f.read().decode("utf-8", errors="ignore")
 
         elif ext == ".pdf":
-            import PyPDF2
-            reader = PyPDF2.PdfReader(f)
+            from pypdf import PdfReader
+            reader = PdfReader(f)
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
 
         elif ext in (".docx",):
