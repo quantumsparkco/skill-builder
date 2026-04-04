@@ -668,6 +668,49 @@ def download(job_id, file_type):
     return "Unknown type", 404
 
 
+@app.route("/parse-file", methods=["POST"])
+def parse_file():
+    """Accept a binary file upload and return extracted plain text."""
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "No file provided"}), 400
+
+    filename = f.filename or ""
+    ext = Path(filename).suffix.lower()
+
+    try:
+        if ext in (".txt", ".md"):
+            text = f.read().decode("utf-8", errors="ignore")
+
+        elif ext == ".pdf":
+            import PyPDF2
+            reader = PyPDF2.PdfReader(f)
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+        elif ext in (".docx",):
+            from docx import Document
+            doc = Document(f)
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+        elif ext in (".pptx",):
+            from pptx import Presentation
+            prs = Presentation(f)
+            parts = []
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        parts.append(shape.text.strip())
+            text = "\n\n".join(parts)
+
+        else:
+            return jsonify({"error": f"Unsupported file type: {ext}"}), 400
+
+        return jsonify({"name": filename, "content": text, "chars": len(text)})
+
+    except Exception as e:
+        return jsonify({"error": f"Could not parse {filename}: {e}"}), 500
+
+
 @app.route("/install/<job_id>", methods=["POST"])
 def install(job_id):
     job = jobs.get(job_id)

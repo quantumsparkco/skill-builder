@@ -416,9 +416,9 @@
         ondrop="handleDrop(event)">
         <div style="font-size:30px;margin-bottom:8px;">📄</div>
         <p style="font-family:var(--font-head);font-size:15px;font-weight:600;letter-spacing:-0.02em;margin-bottom:4px;">Drop files here</p>
-        <p style="font-size:12px;color:var(--text-2);">or click to browse · .txt · .md · .pdf</p>
+        <p style="font-size:12px;color:var(--text-2);">or click to browse · .txt · .md · .pdf · .docx · .pptx</p>
       </div>
-      <input type="file" id="file-input" multiple accept=".txt,.md,.pdf" style="display:none" onchange="handleFiles(this.files)">
+      <input type="file" id="file-input" multiple accept=".txt,.md,.pdf,.docx,.pptx" style="display:none" onchange="handleFiles(this.files)">
       <div id="file-list" style="display:flex;flex-direction:column;gap:6px;margin-top:10px;"></div>
     </div>
 
@@ -913,14 +913,36 @@ function renderUrls() {
 }
 
 // ── File handling ─────────────────────────────────────────
+const BINARY_EXTS = ['.docx', '.pptx', '.pdf'];
+
 async function handleFiles(fl) {
   for (const f of fl) {
     if (files.find(x => x.name === f.name)) continue;
-    const content = await readFile(f);
-    files.push({ name: f.name, content });
+    const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+    try {
+      let content;
+      if (BINARY_EXTS.includes(ext)) {
+        content = await parseFileServer(f);
+      } else {
+        content = await readFile(f);
+      }
+      files.push({ name: f.name, content });
+    } catch(e) {
+      showError(`Could not read ${f.name}: ${e.message}`);
+    }
   }
   renderFiles(); updateCount();
 }
+
+async function parseFileServer(f) {
+  const fd = new FormData();
+  fd.append('file', f);
+  const res = await fetch('/parse-file', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || 'Parse failed');
+  return data.content;
+}
+
 function readFile(f) {
   return new Promise((res, rej) => {
     const r = new FileReader();
