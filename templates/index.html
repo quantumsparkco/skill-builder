@@ -1150,10 +1150,10 @@ function streamProgress(jobId) {
             document.getElementById('progress-title').textContent = 'Build failed';
           })();
         }, 400);
-      return;
-    }
-    addLog(msg.message, msg.type);
-  };
+        return;
+      }
+      addLog(msg.message, msg.type);
+    };
 
   es.onerror = () => {
     es.close();
