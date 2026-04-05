@@ -1110,41 +1110,68 @@ function resetBuildUI() {
 }
 
 function streamProgress(jobId) {
-  const es = new EventSource('/stream/' + jobId);
-  currentEventSource = es;
-  es.onmessage = e => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'ping') return;
-    if (msg.type === 'total') {
-      setTotal(msg.count, msg.estimated_secs);
-      return;
-    }
-    if (msg.type === 'progress') {
-      setProgress(msg.current, msg.total);
-      return;
-    }
-    if (msg.type === 'needs_input') {
-      es.close(); currentEventSource = null;
-      showQuestions(msg.questions, jobId);
-      resetBuildUI();
-      return;
-    }
-    if (msg.type === 'complete') {
-      es.close(); currentEventSource = null;
-      // Show 100% briefly before resetting
-      if (totalVideos > 0) updateProgressBar(totalVideos, totalVideos);
-      setTimeout(() => {
+  let reconnectTimer = null;
+  let intentionallyClosed = false;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECTS = 20;
+
+  function connect() {
+    if (intentionallyClosed) return;
+    const es = new EventSource('/stream/' + jobId);
+    currentEventSource = es;
+
+    es.onmessage = e => {
+      reconnectAttempts = 0; // reset on successful message
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'ping') return;
+      if (msg.type === 'total') {
+        setTotal(msg.count, msg.estimated_secs);
+        return;
+      }
+      if (msg.type === 'progress') {
+        setProgress(msg.current, msg.total);
+        return;
+      }
+      if (msg.type === 'needs_input') {
+        intentionallyClosed = true;
+        es.close(); currentEventSource = null;
+        showQuestions(msg.questions, jobId);
         resetBuildUI();
-        msg.skill_name ? loadResult(jobId) : (() => {
-          document.getElementById('progress-spinner').style.display = 'none';
-          document.getElementById('progress-title').textContent = 'Build failed';
-        })();
-      }, 400);
+        return;
+      }
+      if (msg.type === 'complete') {
+        intentionallyClosed = true;
+        es.close(); currentEventSource = null;
+        if (totalVideos > 0) updateProgressBar(totalVideos, totalVideos);
+        setTimeout(() => {
+          resetBuildUI();
+          msg.skill_name ? loadResult(jobId) : (() => {
+            document.getElementById('progress-spinner').style.display = 'none';
+            document.getElementById('progress-title').textContent = 'Build failed';
+          })();
+        }, 400);
       return;
     }
     addLog(msg.message, msg.type);
   };
-  es.onerror = () => { es.close(); currentEventSource = null; resetBuildUI(); };
+
+  es.onerror = () => {
+    es.close();
+    currentEventSource = null;
+    if (intentionallyClosed) return;
+    reconnectAttempts++;
+    if (reconnectAttempts > MAX_RECONNECTS) {
+      addLog('Connection lost and could not reconnect. The build may still be running — refresh the page to check.', 'error');
+      resetBuildUI();
+      return;
+    }
+    const delay = Math.min(1000 * reconnectAttempts, 10000);
+    addLog(`Connection dropped — reconnecting in ${Math.round(delay/1000)}s... (attempt ${reconnectAttempts})`, 'info');
+    reconnectTimer = setTimeout(connect, delay);
+  };
+  }
+
+  connect();
 }
 
 function addLog(message, kind) {
