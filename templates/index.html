@@ -949,6 +949,11 @@ async function handleFiles(fl) {
   for (const f of fl) {
     if (files.find(x => x.name === f.name)) { skipped++; continue; }
     const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+
+    // Show a "processing" pill immediately
+    const tempId = 'tmp-' + Math.random().toString(36).slice(2);
+    addPendingPill(tempId, f.name);
+
     try {
       let content;
       if (BINARY_EXTS.includes(ext)) {
@@ -956,15 +961,43 @@ async function handleFiles(fl) {
       } else {
         content = await readFile(f);
       }
+      removePendingPill(tempId);
       const hash = simpleHash(content);
       if (files.find(x => x.hash === hash)) { skipped++; continue; }
       files.push({ name: f.name, content, hash });
+      renderFiles(); updateCount();
     } catch(e) {
+      removePendingPill(tempId);
       showError(`Could not read ${f.name}: ${e.message}`);
     }
   }
   if (skipped > 0) showError(`${skipped} duplicate file${skipped > 1 ? 's' : ''} skipped.`);
-  renderFiles(); updateCount();
+}
+
+function addPendingPill(id, name) {
+  const list = document.getElementById('file-list');
+  const d = document.createElement('div');
+  d.className = 'pill';
+  d.id = id;
+  d.style.opacity = '0.6';
+
+  const badge = document.createElement('span');
+  badge.className = 'pill-badge';
+  badge.style.cssText = 'background:rgba(107,79,232,0.15);color:var(--brand-300);font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:2px 7px;border-radius:4px;flex-shrink:0;';
+  badge.textContent = '⏳ reading';
+
+  const label = document.createElement('span');
+  label.className = 'pill-text';
+  label.textContent = name;
+
+  d.appendChild(badge);
+  d.appendChild(label);
+  list.appendChild(d);
+}
+
+function removePendingPill(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
 }
 
 async function parseFileServer(f) {
