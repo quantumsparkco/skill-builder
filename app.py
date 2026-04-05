@@ -32,6 +32,47 @@ jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, 
 # Background build worker
 # ──────────────────────────────────────────────
 
+BATCH_SIZE = 35_000  # chars per batch sent to Claude
+
+def _parse_skill_json(raw):
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]+\}", raw)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+    return None
+
+
+def _make_batches(all_parts):
+    """Split content parts into batches of ~BATCH_SIZE chars each."""
+    batches = []
+    current_batch = []
+    current_size = 0
+    for part in all_parts:
+        content = part["content"]
+        # If a single part exceeds batch size, split it
+        while len(content) > BATCH_SIZE:
+            chunk = content[:BATCH_SIZE]
+            current_batch.append({**part, "content": chunk})
+            batches.append(current_batch)
+            current_batch = []
+            current_size = 0
+            content = content[BATCH_SIZE:]
+        if current_size + len(content) > BATCH_SIZE and current_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_size = 0
+        current_batch.append({**part, "content": content})
+        current_size += len(content)
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
 def run_build(job_id, sources, max_videos, raw_text, intention=""):
     q = jobs[job_id]["queue"]
 
@@ -83,78 +124,119 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         if not all_parts:
             raise ValueError("No content was successfully fetched. Check URLs and try again.")
 
-        # Combine content
-        if len(all_parts) == 1:
-            combined = all_parts[0]["content"]
-            source_title = all_parts[0]["title"]
-            source_url = all_parts[0]["url"]
-        else:
-            parts_text = []
-            for p in all_parts:
-                header = f"# {p['title']}"
-                if p["url"]:
-                    header += f"\nSource: {p['url']}"
-                parts_text.append(f"{header}\n\n{p['content']}")
-            combined = "\n\n---\n\n".join(parts_text)
-            source_title = "Combined: " + ", ".join(p["title"][:25] for p in all_parts[:3])
-            source_url = sources[0] if sources else ""
-
-        # Truncate for API — keep well within Claude's context window
-        MAX = 40_000
-        if len(combined) > MAX:
-            log(f"Content truncated to {MAX:,} chars for processing ({len(combined):,} total)")
-            combined = combined[:MAX] + "\n\n[...truncated...]"
-
         if jobs[job_id].get("cancelled"):
             return
 
         log("Loading knowledge base...")
         best_practices, lessons, sources_catalog = read_knowledge_base()
 
-        def _call_claude(content, max_tok=6000):
-            client = anthropic.Anthropic()
-            message = client.messages.create(
+        source_title = "Combined: " + ", ".join(p["title"][:25] for p in all_parts[:3])
+        source_url = sources[0] if sources else ""
+
+        # ── Plan batches ──────────────────────────────────────────────────────
+        batches = _make_batches(all_parts)
+        total_chars = sum(len(p["content"]) for p in all_parts)
+        n_batches = len(batches)
+
+        if n_batches == 1:
+            log(f"Processing {total_chars:,} chars in a single pass...")
+        else:
+            secs_per_batch = 45  # ~45s per Claude call
+            est_secs = n_batches * secs_per_batch + 30
+            est_min = round(est_secs / 60, 1)
+            log(f"Content inventory: {total_chars:,} chars across {n_batches} batches — est. {est_min} min", "info")
+            q.put({"type": "batch_total", "count": n_batches, "estimated_secs": est_secs})
+
+        client = anthropic.Anthropic()
+
+        def _call_claude_batch(content, batch_num, of_total):
+            label = f"batch {batch_num}/{of_total}" if of_total > 1 else "skill"
+            log(f"Generating {label} with Claude Opus 4.6...")
+            msg = client.messages.create(
                 model="claude-opus-4-6",
-                max_tokens=max_tok,
+                max_tokens=6000,
                 system=SYSTEM_PROMPT,
-                messages=[{
-                    "role": "user",
-                    "content": build_user_message(
-                        content, source_title, source_url,
-                        best_practices, lessons, sources_catalog,
-                        intention=intention,
-                    ),
+                messages=[{"role": "user", "content": build_user_message(
+                    content, source_title, source_url,
+                    best_practices, lessons, sources_catalog,
+                    intention=intention,
+                )}],
+            )
+            return msg.content[0].text.strip()
+
+        # ── Process each batch ────────────────────────────────────────────────
+        partial_skills = []
+
+        for i, batch in enumerate(batches, 1):
+            if jobs[job_id].get("cancelled"):
+                return
+
+            batch_text = "\n\n---\n\n".join(
+                f"# {p['title']}\n\n{p['content']}" for p in batch
+            )
+
+            raw = _call_claude_batch(batch_text, i, n_batches)
+            result = _parse_skill_json(raw)
+
+            if not result:
+                # Retry once with same content
+                log(f"Batch {i} parse failed — retrying...", "info")
+                raw = _call_claude_batch(batch_text, i, n_batches)
+                result = _parse_skill_json(raw)
+
+            if result:
+                partial_skills.append(result)
+                log(f"Batch {i}/{n_batches} complete ✓", "success")
+            else:
+                log(f"Batch {i}/{n_batches} failed after retry — skipping", "error")
+
+            if n_batches > 1:
+                q.put({"type": "batch_progress", "current": i, "total": n_batches})
+
+        if not partial_skills:
+            raise ValueError("All batches failed — could not generate skill")
+
+        # ── Merge if multiple batches ─────────────────────────────────────────
+        if len(partial_skills) == 1:
+            skill_result = partial_skills[0]
+        else:
+            log(f"Merging {len(partial_skills)} batches into final skill...", "info")
+
+            MERGE_PROMPT = """\
+You are merging multiple partial Claude Code skill files into one final, coherent skill.
+
+Rules:
+1. Synthesize all knowledge — do not lose important content from any partial skill
+2. Remove redundancy — if multiple partials cover the same point, keep the best version
+3. Keep the skill under 500 lines
+4. Maintain the standard SKILL.md format with frontmatter
+5. Return a JSON object with the same keys as a normal skill build:
+   skill_name, skill_md, sources_md, notes_md, summary, questions
+"""
+            partials_text = "\n\n---PARTIAL SKILL---\n\n".join(
+                p.get("skill_md", "") for p in partial_skills
+            )
+            merge_msg = client.messages.create(
+                model="claude-opus-4-6",
+                max_tokens=8000,
+                system=MERGE_PROMPT,
+                messages=[{"role": "user", "content":
+                    f"Merge these {len(partial_skills)} partial skills into one:\n\n{partials_text}\n\n"
+                    f"Use sources.md from the first partial as the base and supplement with others.\n"
+                    f"Intention: {intention}"
                 }],
             )
-            return message.content[0].text.strip()
+            raw_merge = merge_msg.content[0].text.strip()
+            skill_result = _parse_skill_json(raw_merge)
 
-        def _parse_skill_json(raw):
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                m = re.search(r"\{[\s\S]+\}", raw)
-                if m:
-                    try:
-                        return json.loads(m.group(0))
-                    except Exception:
-                        pass
-            return None
+            if not skill_result:
+                # Fallback: use the first partial skill
+                log("Merge parse failed — using best single batch result", "error")
+                skill_result = partial_skills[0]
+            else:
+                log("Merge complete ✓", "success")
 
-        log("Generating skill with Claude Opus 4.6 ...")
-        raw = _call_claude(combined)
-        skill_result = _parse_skill_json(raw)
-
-        # Retry with half the content if JSON parsing failed
-        if not skill_result:
-            log("Response parsing failed — retrying with reduced content...", "info")
-            half = combined[:MAX // 2] + "\n\n[...truncated for retry...]"
-            raw = _call_claude(half, max_tok=6000)
-            skill_result = _parse_skill_json(raw)
-
-        if not skill_result:
-            raise ValueError("Could not parse Claude response as JSON after retry")
-
-        # If Claude flagged unresolvable contradictions, pause for user input
+        # ── Questions / finalize ──────────────────────────────────────────────
         questions = skill_result.get("questions", [])
         if questions:
             log(f"Found {len(questions)} conflict(s) that need your input", "warn")
@@ -162,14 +244,13 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
                 "status": "needs_input",
                 "result": skill_result,
                 "questions": questions,
-                "combined_content": combined,
+                "combined_content": "\n\n".join(p.get("skill_md","") for p in partial_skills),
                 "source_title": source_title,
                 "source_url": source_url,
             })
             q.put({"type": "needs_input", "questions": questions})
-            return  # Wait for user answers via /answer endpoint
+            return
 
-        # No questions — save and finish
         _finalize_skill(job_id, skill_result, q)
 
     except Exception as e:

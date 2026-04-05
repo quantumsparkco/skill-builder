@@ -802,6 +802,25 @@ function stopTimer() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
 }
 
+function setBatchTotal(count, estimatedSecs) {
+  countdownSecs = estimatedSecs;
+  totalVideos   = count;
+  document.getElementById('progress-bar-wrap').style.display = 'block';
+  document.getElementById('progress-count').textContent = `Batch 0 / ${count}`;
+  updateProgressBar(0, count);
+}
+
+function setBatchProgress(current, total) {
+  const elapsed = (Date.now() - timerStart) / 1000;
+  if (current > 0) {
+    const secsPerBatch = elapsed / current;
+    const remaining = (total - current) * secsPerBatch + 10;
+    countdownSecs = Math.round(elapsed + remaining);
+  }
+  document.getElementById('progress-count').textContent = `Batch ${current} / ${total}`;
+  updateProgressBar(current, total);
+}
+
 function recordFetch() { /* kept for compatibility — progress now driven by SSE */ }
 
 // ── Mode switching ─────────────────────────────────────────
@@ -1163,6 +1182,14 @@ function streamProgress(jobId) {
       }
       if (msg.type === 'progress') {
         setProgress(msg.current, msg.total);
+        return;
+      }
+      if (msg.type === 'batch_total') {
+        setBatchTotal(msg.count, msg.estimated_secs);
+        return;
+      }
+      if (msg.type === 'batch_progress') {
+        setBatchProgress(msg.current, msg.total);
         return;
       }
       if (msg.type === 'needs_input') {
