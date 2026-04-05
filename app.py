@@ -99,10 +99,10 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
             source_title = "Combined: " + ", ".join(p["title"][:25] for p in all_parts[:3])
             source_url = sources[0] if sources else ""
 
-        # Truncate for API
-        MAX = 55_000
+        # Truncate for API — keep well within Claude's context window
+        MAX = 40_000
         if len(combined) > MAX:
-            log(f"Content truncated to {MAX:,} chars for processing")
+            log(f"Content truncated to {MAX:,} chars for processing ({len(combined):,} total)")
             combined = combined[:MAX] + "\n\n[...truncated...]"
 
         if jobs[job_id].get("cancelled"):
@@ -111,30 +111,48 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         log("Loading knowledge base...")
         best_practices, lessons, sources_catalog = read_knowledge_base()
 
-        log("Generating skill with Claude Opus 4.6 ...")
-        client = anthropic.Anthropic()
-        message = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=6000,
-            system=SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": build_user_message(
-                    combined, source_title, source_url,
-                    best_practices, lessons, sources_catalog,
-                    intention=intention,
-                ),
-            }],
-        )
+        def _call_claude(content, max_tok=6000):
+            client = anthropic.Anthropic()
+            message = client.messages.create(
+                model="claude-opus-4-6",
+                max_tokens=max_tok,
+                system=SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": build_user_message(
+                        content, source_title, source_url,
+                        best_practices, lessons, sources_catalog,
+                        intention=intention,
+                    ),
+                }],
+            )
+            return message.content[0].text.strip()
 
-        raw = message.content[0].text.strip()
-        try:
-            skill_result = json.loads(raw)
-        except json.JSONDecodeError:
-            m = re.search(r"\{[\s\S]+\}", raw)
-            skill_result = json.loads(m.group(0)) if m else None
+        def _parse_skill_json(raw):
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                m = re.search(r"\{[\s\S]+\}", raw)
+                if m:
+                    try:
+                        return json.loads(m.group(0))
+                    except Exception:
+                        pass
+            return None
+
+        log("Generating skill with Claude Opus 4.6 ...")
+        raw = _call_claude(combined)
+        skill_result = _parse_skill_json(raw)
+
+        # Retry with half the content if JSON parsing failed
         if not skill_result:
-            raise ValueError("Could not parse Claude response as JSON")
+            log("Response parsing failed — retrying with reduced content...", "info")
+            half = combined[:MAX // 2] + "\n\n[...truncated for retry...]"
+            raw = _call_claude(half, max_tok=6000)
+            skill_result = _parse_skill_json(raw)
+
+        if not skill_result:
+            raise ValueError("Could not parse Claude response as JSON after retry")
 
         # If Claude flagged unresolvable contradictions, pause for user input
         questions = skill_result.get("questions", [])
@@ -299,6 +317,11 @@ def run_build_persona(job_id, sources, max_videos, raw_text, intention=""):
             combined = "\n\n---\n\n".join(parts_text)
             source_title = "Combined: " + ", ".join(p["title"][:25] for p in all_parts[:3])
             source_url = sources[0] if sources else ""
+
+        MAX_P = 40_000
+        if len(combined) > MAX_P:
+            log(f"Content truncated to {MAX_P:,} chars for processing ({len(combined):,} total)")
+            combined = combined[:MAX_P] + "\n\n[...truncated...]"
 
         log("Generating persona with Claude Opus 4.6...")
         result = generate_persona(combined, source_title, source_url, intention=intention)
