@@ -32,7 +32,21 @@ jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, 
 # Background build worker
 # ──────────────────────────────────────────────
 
-BATCH_SIZE = 35_000  # chars per batch sent to Claude
+BATCH_SIZE = 35_000      # chars per batch sent to Claude Opus for skill generation
+SUMMARY_THRESHOLD = 8_000  # chars — summarize sources longer than this
+SUMMARY_TARGET = 1_500     # target chars per summary (~300 words)
+
+SUMMARIZE_PROMPT = """\
+You are extracting the most valuable knowledge from source material for a skill-building system.
+
+Extract ONLY the actionable, specific, reusable knowledge — tactics, frameworks, formulas,
+step-by-step processes, specific numbers, rules of thumb, and decision criteria.
+
+Strip out: stories, filler, repetition, motivational content, and anything generic.
+
+Format as tight bullet points grouped by topic. Target 250-350 words.
+Do NOT add commentary or preamble — just the bullets.
+"""
 
 def _parse_skill_json(raw):
     try:
@@ -71,6 +85,24 @@ def _make_batches(all_parts):
     if current_batch:
         batches.append(current_batch)
     return batches
+
+
+def _summarize_content(client, content, title, intention):
+    """Summarize a single piece of content using Haiku. Returns summarized text."""
+    intent_line = f"\nFocus on content relevant to: {intention}\n" if intention else ""
+    try:
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=SUMMARIZE_PROMPT,
+            messages=[{"role": "user", "content":
+                f"Source: {title}{intent_line}\n\n{content[:12_000]}"
+            }],
+        )
+        return msg.content[0].text.strip()
+    except Exception:
+        # On failure, return a hard truncation rather than nothing
+        return content[:SUMMARY_TARGET]
 
 
 def run_build(job_id, sources, max_videos, raw_text, intention=""):
@@ -126,6 +158,26 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
 
         if jobs[job_id].get("cancelled"):
             return
+
+        # ── Summarization pass ────────────────────────────────────────────────
+        # Any source over SUMMARY_THRESHOLD chars gets distilled to ~300 words
+        # using Haiku before being passed to Opus. This keeps total content
+        # manageable regardless of how many sources are provided.
+        total_raw_chars = sum(len(p["content"]) for p in all_parts)
+        needs_summary = [p for p in all_parts if len(p["content"]) > SUMMARY_THRESHOLD]
+
+        if needs_summary:
+            log(f"Summarizing {len(needs_summary)} large sources ({total_raw_chars:,} chars → ~{len(all_parts) * SUMMARY_TARGET:,} chars)...")
+            client_haiku = anthropic.Anthropic()
+            q.put({"type": "summarize_total", "count": len(needs_summary)})
+
+            for i, part in enumerate(needs_summary, 1):
+                if jobs[job_id].get("cancelled"):
+                    return
+                summary = _summarize_content(client_haiku, part["content"], part["title"], intention)
+                part["content"] = summary
+                log(f"Summarized [{i}/{len(needs_summary)}]: {part['title'][:50]} ({len(summary):,} chars)", "success")
+                q.put({"type": "summarize_progress", "current": i, "total": len(needs_summary)})
 
         log("Loading knowledge base...")
         best_practices, lessons, sources_catalog = read_knowledge_base()

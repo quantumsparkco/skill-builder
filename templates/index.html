@@ -802,6 +802,24 @@ function stopTimer() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
 }
 
+function setSummarizeTotal(count) {
+  document.getElementById('progress-bar-wrap').style.display = 'block';
+  document.getElementById('progress-count').textContent = `Summarizing 0 / ${count} sources`;
+  updateProgressBar(0, count);
+  document.getElementById('progress-title').textContent = 'Summarizing sources...';
+}
+
+function setSummarizeProgress(current, total) {
+  document.getElementById('progress-count').textContent = `Summarizing ${current} / ${total} sources`;
+  updateProgressBar(current, total);
+  // Recalculate ETA — ~3s per summary
+  const elapsed = (Date.now() - timerStart) / 1000;
+  if (current > 0) {
+    const secsEach = elapsed / current;
+    countdownSecs = Math.round(elapsed + (total - current) * secsEach + 60);
+  }
+}
+
 function setBatchTotal(count, estimatedSecs) {
   countdownSecs = estimatedSecs;
   totalVideos   = count;
@@ -1190,6 +1208,14 @@ function streamProgress(jobId) {
       }
       if (msg.type === 'batch_progress') {
         setBatchProgress(msg.current, msg.total);
+        return;
+      }
+      if (msg.type === 'summarize_total') {
+        setSummarizeTotal(msg.count);
+        return;
+      }
+      if (msg.type === 'summarize_progress') {
+        setSummarizeProgress(msg.current, msg.total);
         return;
       }
       if (msg.type === 'needs_input') {
