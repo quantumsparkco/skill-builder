@@ -32,9 +32,17 @@ jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, 
 # Background build worker
 # ──────────────────────────────────────────────
 
-BATCH_SIZE = 35_000      # chars per batch sent to Claude Opus for skill generation
-SUMMARY_THRESHOLD = 8_000  # chars — summarize sources longer than this
-SUMMARY_TARGET = 1_500     # target chars per summary (~300 words)
+BATCH_SIZE = 35_000          # chars per Opus batch
+CONTENT_BUDGET = 60_000      # max chars of summarized content sent to Opus
+SUMMARY_MAX_INPUT = 15_000   # max chars of raw content fed to Haiku per source
+
+# Haiku pricing: $0.80/M input, $4/M output (approx)
+# Opus pricing:  $15/M input, $75/M output (approx)
+HAIKU_INPUT_COST_PER_CHAR  = 0.80  / 1_000_000
+HAIKU_OUTPUT_COST_PER_CHAR = 4.00  / 1_000_000
+OPUS_INPUT_COST_PER_CHAR   = 15.0  / 1_000_000
+OPUS_OUTPUT_COST_PER_CHAR  = 75.0  / 1_000_000
+SUMMARY_OUTPUT_CHARS = 1_500   # expected output chars per Haiku summary
 
 SUMMARIZE_PROMPT = """\
 You are extracting the most valuable knowledge from source material for a skill-building system.
@@ -87,25 +95,50 @@ def _make_batches(all_parts):
     return batches
 
 
-def _summarize_content(client, content, title, intention):
+def _summarize_content(client, content, title, source_intention, global_intention):
     """Summarize a single piece of content using Haiku. Returns summarized text."""
-    intent_line = f"\nFocus on content relevant to: {intention}\n" if intention else ""
+    # Per-source intention takes priority; fall back to global
+    effective_intention = source_intention or global_intention
+    intent_line = f"\nFocus on content relevant to: {effective_intention}\n" if effective_intention else ""
     try:
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=600,
             system=SUMMARIZE_PROMPT,
             messages=[{"role": "user", "content":
-                f"Source: {title}{intent_line}\n\n{content[:12_000]}"
+                f"Source: {title}{intent_line}\n\n{content[:SUMMARY_MAX_INPUT]}"
             }],
         )
         return msg.content[0].text.strip()
     except Exception:
-        # On failure, return a hard truncation rather than nothing
-        return content[:SUMMARY_TARGET]
+        return content[:SUMMARY_OUTPUT_CHARS]
+
+
+def _score_summary(summary, intention):
+    """Score a summary by keyword density against the intention."""
+    if not intention:
+        return 1
+    import re as _re
+    stop = {"a","an","the","and","or","but","in","on","at","to","for","of","with",
+            "by","from","as","is","are","was","were","be","been","have","has","had",
+            "do","does","did","will","would","could","should","i","we","you","they","it"}
+    keywords = [w for w in _re.findall(r'\b[a-z]{3,}\b', intention.lower()) if w not in stop]
+    if not keywords:
+        return 1
+    text = summary.lower()
+    return sum(text.count(kw) for kw in keywords)
 
 
 def run_build(job_id, sources, max_videos, raw_text, intention=""):
+    """
+    Pipeline:
+    1. Fetch all transcripts (free)
+    2. Haiku summarizes every source to ~300 words (cheap)
+    3. Rank summaries by relevance score against intention
+    4. Fill CONTENT_BUDGET with top-ranked summaries
+    5. Show cost estimate → wait for user confirmation
+    6. Opus builds skill from budget content
+    """
     q = jobs[job_id]["queue"]
 
     def log(msg, kind="info"):
@@ -116,26 +149,45 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         from generate_skill import SYSTEM_PROMPT, build_user_message, read_knowledge_base, save_skill
         import anthropic
 
+        # source_intentions: {url: intention_string}
+        source_intentions = jobs[job_id].get("source_intentions", {})
+
         all_parts = []
 
-        # Process each URL
+        # ── Phase 1: Fetch all content ────────────────────────────────────────
         for url in sources:
             if jobs[job_id].get("cancelled"):
                 return
             log(f"Fetching: {url}")
+            src_intention = source_intentions.get(url, "")
+            effective_intention = src_intention or intention
             try:
                 def _fwd(msg):
                     if jobs[job_id].get("cancelled"):
                         return
                     q.put(msg)
                 result = fetch(url, max_videos=max_videos, verbose=False,
-                               intention=intention, log_fn=_fwd)
-                all_parts.append({
-                    "title": result["title"],
-                    "content": result["content"],
-                    "url": url,
-                    "video_count": result.get("video_count", 1),
-                })
+                               intention=effective_intention, log_fn=_fwd)
+
+                # For collections, split into per-video parts for granular ranking
+                if result.get("videos"):
+                    for v in result["videos"]:
+                        all_parts.append({
+                            "title": v["title"],
+                            "content": v["transcript"],
+                            "url": v["url"],
+                            "source_url": url,
+                            "source_intention": src_intention,
+                        })
+                else:
+                    all_parts.append({
+                        "title": result["title"],
+                        "content": result["content"],
+                        "url": url,
+                        "source_url": url,
+                        "source_intention": src_intention,
+                    })
+
                 vids = result.get("video_count", 1)
                 chars = len(result["content"])
                 label = f"{vids} videos, {chars:,} chars" if vids > 1 else f"{chars:,} chars"
@@ -143,13 +195,13 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
             except Exception as e:
                 log(f"Failed: {url} — {e}", "error")
 
-        # Add uploaded / pasted text
         if raw_text:
             all_parts.append({
                 "title": "Uploaded Content",
                 "content": raw_text,
                 "url": "",
-                "video_count": 1,
+                "source_url": "",
+                "source_intention": "",
             })
             log(f"Got: Uploaded content ({len(raw_text):,} chars)", "success")
 
@@ -159,82 +211,145 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         if jobs[job_id].get("cancelled"):
             return
 
-        # ── Summarization pass ────────────────────────────────────────────────
-        # Any source over SUMMARY_THRESHOLD chars gets distilled to ~300 words
-        # using Haiku before being passed to Opus. This keeps total content
-        # manageable regardless of how many sources are provided.
-        total_raw_chars = sum(len(p["content"]) for p in all_parts)
-        needs_summary = [p for p in all_parts if len(p["content"]) > SUMMARY_THRESHOLD]
-
-        if needs_summary:
-            log(f"Summarizing {len(needs_summary)} large sources ({total_raw_chars:,} chars → ~{len(all_parts) * SUMMARY_TARGET:,} chars)...")
-            client_haiku = anthropic.Anthropic()
-            q.put({"type": "summarize_total", "count": len(needs_summary)})
-
-            for i, part in enumerate(needs_summary, 1):
-                if jobs[job_id].get("cancelled"):
-                    return
-                summary = _summarize_content(client_haiku, part["content"], part["title"], intention)
-                part["content"] = summary
-                log(f"Summarized [{i}/{len(needs_summary)}]: {part['title'][:50]} ({len(summary):,} chars)", "success")
-                q.put({"type": "summarize_progress", "current": i, "total": len(needs_summary)})
-
-        log("Loading knowledge base...")
-        best_practices, lessons, sources_catalog = read_knowledge_base()
-
-        source_title = "Combined: " + ", ".join(p["title"][:25] for p in all_parts[:3])
-        source_url = sources[0] if sources else ""
-
-        # ── Plan batches ──────────────────────────────────────────────────────
-        batches = _make_batches(all_parts)
-        total_chars = sum(len(p["content"]) for p in all_parts)
-        n_batches = len(batches)
-
-        if n_batches == 1:
-            log(f"Processing {total_chars:,} chars in a single pass...")
-        else:
-            secs_per_batch = 45  # ~45s per Claude call
-            est_secs = n_batches * secs_per_batch + 30
-            est_min = round(est_secs / 60, 1)
-            log(f"Content inventory: {total_chars:,} chars across {n_batches} batches — est. {est_min} min", "info")
-            q.put({"type": "batch_total", "count": n_batches, "estimated_secs": est_secs})
+        # ── Phase 2: Haiku summarizes every source ────────────────────────────
+        total_raw = sum(len(p["content"]) for p in all_parts)
+        log(f"Summarizing {len(all_parts)} sources ({total_raw:,} raw chars) with Haiku...")
+        q.put({"type": "summarize_total", "count": len(all_parts)})
 
         client = anthropic.Anthropic()
+        for i, part in enumerate(all_parts, 1):
+            if jobs[job_id].get("cancelled"):
+                return
+            summary = _summarize_content(
+                client, part["content"], part["title"],
+                part.get("source_intention", ""), intention
+            )
+            part["summary"] = summary
+            q.put({"type": "summarize_progress", "current": i, "total": len(all_parts)})
 
-        def _call_claude_batch(content, batch_num, of_total):
-            label = f"batch {batch_num}/{of_total}" if of_total > 1 else "skill"
-            log(f"Generating {label} with Claude Opus 4.6...")
+        log(f"Summarization complete — {len(all_parts)} sources distilled", "success")
+
+        # ── Phase 3: Rank by relevance ────────────────────────────────────────
+        for part in all_parts:
+            part["score"] = _score_summary(part["summary"], intention)
+
+        ranked = sorted(all_parts, key=lambda p: -p["score"])
+
+        # ── Phase 4: Fill content budget ──────────────────────────────────────
+        selected = []
+        budget_used = 0
+        for part in ranked:
+            s = part["summary"]
+            if budget_used + len(s) <= CONTENT_BUDGET:
+                selected.append(part)
+                budget_used += len(s)
+            if budget_used >= CONTENT_BUDGET:
+                break
+
+        skipped = len(all_parts) - len(selected)
+        log(f"Selected top {len(selected)} sources ({budget_used:,} chars) — {skipped} lower-relevance sources excluded", "info")
+
+        # ── Phase 5: Cost estimate + confirmation gate ────────────────────────
+        haiku_input_chars  = total_raw
+        haiku_output_chars = len(all_parts) * SUMMARY_OUTPUT_CHARS
+        haiku_cost = (haiku_input_chars * HAIKU_INPUT_COST_PER_CHAR +
+                      haiku_output_chars * HAIKU_OUTPUT_COST_PER_CHAR)
+
+        batches = _make_batches([{**p, "content": p["summary"]} for p in selected])
+        n_batches = len(batches)
+        opus_input_chars  = budget_used + 10_000  # +10k for system prompt/knowledge base
+        opus_output_chars = n_batches * 6_000
+        opus_cost = (opus_input_chars * OPUS_INPUT_COST_PER_CHAR +
+                     opus_output_chars * OPUS_OUTPUT_COST_PER_CHAR)
+
+        total_cost = haiku_cost + opus_cost
+        est_secs   = len(all_parts) * 3 + n_batches * 45 + 30
+
+        q.put({
+            "type": "cost_estimate",
+            "sources": len(selected),
+            "total_sources": len(all_parts),
+            "batches": n_batches,
+            "haiku_cost": round(haiku_cost, 2),
+            "opus_cost": round(opus_cost, 2),
+            "total_cost": round(total_cost, 2),
+            "estimated_secs": est_secs,
+        })
+
+        # Wait for user confirmation (or auto-proceed if under $1)
+        if total_cost > 1.00:
+            jobs[job_id]["status"] = "awaiting_confirmation"
+            jobs[job_id]["pending_selected"] = selected
+            jobs[job_id]["pending_batches"] = batches
+            jobs[job_id]["pending_source_title"] = "Combined: " + ", ".join(p["title"][:20] for p in selected[:3])
+            jobs[job_id]["pending_source_url"] = sources[0] if sources else ""
+            return  # Frontend must POST /confirm/<job_id> to continue
+
+        # Under $1 — proceed automatically
+        _run_opus_phase(job_id, selected, batches, sources, intention, q, log, client)
+
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        log(f"Error: {e}", "error")
+        q.put({"type": "complete", "skill_name": None})
+
+
+def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, client):
+    """Phase 6: Opus builds skill from ranked summaries."""
+    from generate_skill import SYSTEM_PROMPT, build_user_message, read_knowledge_base
+
+    source_title = "Combined: " + ", ".join(p["title"][:20] for p in selected[:3])
+    source_url   = sources[0] if sources else ""
+    n_batches    = len(batches)
+
+    jobs[job_id]["status"] = "running"
+
+    log("Loading knowledge base...")
+    best_practices, lessons, sources_catalog = read_knowledge_base()
+
+    if n_batches > 1:
+        est_secs = n_batches * 45 + 30
+        q.put({"type": "batch_total", "count": n_batches, "estimated_secs": est_secs})
+
+    partial_skills = []
+
+    for i, batch in enumerate(batches, 1):
+        if jobs[job_id].get("cancelled"):
+            return
+
+        batch_text = "\n\n---\n\n".join(
+            f"# {p['title']}\n\n{p['summary']}" for p in batch
+        )
+        log(f"Generating batch {i}/{n_batches} with Claude Opus 4.6...")
+
+        try:
             msg = client.messages.create(
                 model="claude-opus-4-6",
                 max_tokens=6000,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": build_user_message(
-                    content, source_title, source_url,
+                    batch_text, source_title, source_url,
                     best_practices, lessons, sources_catalog,
                     intention=intention,
                 )}],
             )
-            return msg.content[0].text.strip()
-
-        # ── Process each batch ────────────────────────────────────────────────
-        partial_skills = []
-
-        for i, batch in enumerate(batches, 1):
-            if jobs[job_id].get("cancelled"):
-                return
-
-            batch_text = "\n\n---\n\n".join(
-                f"# {p['title']}\n\n{p['content']}" for p in batch
-            )
-
-            raw = _call_claude_batch(batch_text, i, n_batches)
+            raw = msg.content[0].text.strip()
             result = _parse_skill_json(raw)
 
             if not result:
-                # Retry once with same content
                 log(f"Batch {i} parse failed — retrying...", "info")
-                raw = _call_claude_batch(batch_text, i, n_batches)
-                result = _parse_skill_json(raw)
+                msg2 = client.messages.create(
+                    model="claude-opus-4-6",
+                    max_tokens=6000,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": build_user_message(
+                        batch_text, source_title, source_url,
+                        best_practices, lessons, sources_catalog,
+                        intention=intention,
+                    )}],
+                )
+                result = _parse_skill_json(msg2.content[0].text.strip())
 
             if result:
                 partial_skills.append(result)
@@ -242,74 +357,60 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
             else:
                 log(f"Batch {i}/{n_batches} failed after retry — skipping", "error")
 
-            if n_batches > 1:
-                q.put({"type": "batch_progress", "current": i, "total": n_batches})
+        except Exception as e:
+            log(f"Batch {i} error: {e}", "error")
 
-        if not partial_skills:
-            raise ValueError("All batches failed — could not generate skill")
+        if n_batches > 1:
+            q.put({"type": "batch_progress", "current": i, "total": n_batches})
 
-        # ── Merge if multiple batches ─────────────────────────────────────────
-        if len(partial_skills) == 1:
+    if not partial_skills:
+        jobs[job_id]["status"] = "error"
+        q.put({"type": "complete", "skill_name": None})
+        return
+
+    # Merge if needed
+    if len(partial_skills) == 1:
+        skill_result = partial_skills[0]
+    else:
+        log(f"Merging {len(partial_skills)} batches into final skill...", "info")
+        MERGE_PROMPT = """\
+Merge these partial Claude Code skill files into one final coherent skill.
+1. Synthesize all knowledge — keep the best version of each point
+2. Remove redundancy
+3. Keep under 500 lines
+4. Return JSON with keys: skill_name, skill_md, sources_md, notes_md, summary, questions
+"""
+        partials_text = "\n\n---PARTIAL---\n\n".join(p.get("skill_md","") for p in partial_skills)
+        merge_msg = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=8000,
+            system=MERGE_PROMPT,
+            messages=[{"role": "user", "content":
+                f"Merge {len(partial_skills)} partials. Intention: {intention}\n\n{partials_text}"
+            }],
+        )
+        skill_result = _parse_skill_json(merge_msg.content[0].text.strip())
+        if not skill_result:
+            log("Merge parse failed — using best single batch", "error")
             skill_result = partial_skills[0]
         else:
-            log(f"Merging {len(partial_skills)} batches into final skill...", "info")
+            log("Merge complete ✓", "success")
 
-            MERGE_PROMPT = """\
-You are merging multiple partial Claude Code skill files into one final, coherent skill.
+    questions = skill_result.get("questions", [])
+    if questions:
+        log(f"Found {len(questions)} conflict(s) that need your input", "warn")
+        jobs[job_id].update({
+            "status": "needs_input",
+            "result": skill_result,
+            "questions": questions,
+            "combined_content": "\n\n".join(p.get("skill_md","") for p in partial_skills),
+            "source_title": source_title,
+            "source_url": source_url,
+        })
+        q.put({"type": "needs_input", "questions": questions})
+        return
 
-Rules:
-1. Synthesize all knowledge — do not lose important content from any partial skill
-2. Remove redundancy — if multiple partials cover the same point, keep the best version
-3. Keep the skill under 500 lines
-4. Maintain the standard SKILL.md format with frontmatter
-5. Return a JSON object with the same keys as a normal skill build:
-   skill_name, skill_md, sources_md, notes_md, summary, questions
-"""
-            partials_text = "\n\n---PARTIAL SKILL---\n\n".join(
-                p.get("skill_md", "") for p in partial_skills
-            )
-            merge_msg = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=8000,
-                system=MERGE_PROMPT,
-                messages=[{"role": "user", "content":
-                    f"Merge these {len(partial_skills)} partial skills into one:\n\n{partials_text}\n\n"
-                    f"Use sources.md from the first partial as the base and supplement with others.\n"
-                    f"Intention: {intention}"
-                }],
-            )
-            raw_merge = merge_msg.content[0].text.strip()
-            skill_result = _parse_skill_json(raw_merge)
-
-            if not skill_result:
-                # Fallback: use the first partial skill
-                log("Merge parse failed — using best single batch result", "error")
-                skill_result = partial_skills[0]
-            else:
-                log("Merge complete ✓", "success")
-
-        # ── Questions / finalize ──────────────────────────────────────────────
-        questions = skill_result.get("questions", [])
-        if questions:
-            log(f"Found {len(questions)} conflict(s) that need your input", "warn")
-            jobs[job_id].update({
-                "status": "needs_input",
-                "result": skill_result,
-                "questions": questions,
-                "combined_content": "\n\n".join(p.get("skill_md","") for p in partial_skills),
-                "source_title": source_title,
-                "source_url": source_url,
-            })
-            q.put({"type": "needs_input", "questions": questions})
-            return
-
-        _finalize_skill(job_id, skill_result, q)
-
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = str(e)
-        log(f"Error: {e}", "error")
-        q.put({"type": "complete", "skill_name": None})
+    _finalize_skill(job_id, skill_result, q)
 
 
 def _write_watchlist(target_dir: Path, sources: list, intention: str, target_type: str, name: str):
@@ -527,6 +628,8 @@ def build():
     files = data.get("files", [])  # [{name, content}]
     # watch_sources: [{url, schedule}] — sources with recurring schedules
     watch_sources = data.get("watch_sources", [])
+    # source_intentions: {url: intention_string} — per-source focus
+    source_intentions = data.get("source_intentions", {})
 
     # Merge uploaded file content into raw_text
     if files:
@@ -547,6 +650,8 @@ def build():
         "cancelled": False,
         "watch_sources": watch_sources,
         "intention": intention,
+        "sources": sources,
+        "source_intentions": source_intentions,
     }
 
     t = threading.Thread(target=run_build, args=(job_id, sources, max_videos, raw_text, intention))
@@ -788,6 +893,35 @@ def cancel(job_id):
     if job:
         job["cancelled"] = True
         job["status"] = "cancelled"
+    return jsonify({"ok": True})
+
+
+@app.route("/confirm/<job_id>", methods=["POST"])
+def confirm_build(job_id):
+    """Resume an awaiting_confirmation job after user approves the cost estimate."""
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job.get("status") != "awaiting_confirmation":
+        return jsonify({"error": "Job is not awaiting confirmation"}), 400
+
+    selected  = job.pop("pending_selected", [])
+    batches   = job.pop("pending_batches", [])
+    sources   = job.get("sources", [])
+    intention = job.get("intention", "")
+    q         = job["queue"]
+
+    job["status"] = "running"
+
+    import anthropic as _anthropic
+    client = _anthropic.Anthropic()
+
+    def _resume():
+        _run_opus_phase(job_id, selected, batches, sources, intention, q, lambda m, k="info": q.put({"type": k, "message": m}), client)
+
+    import threading
+    t = threading.Thread(target=_resume, daemon=True)
+    t.start()
     return jsonify({"ok": True})
 
 

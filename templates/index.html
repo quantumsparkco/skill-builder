@@ -513,6 +513,22 @@
     <button class="btn-primary" onclick="submitAnswers()">Continue Building Skill →</button>
   </div>
 
+  <!-- Cost Estimate Confirmation Card -->
+  <div class="card fade-in" id="cost-card" style="padding:22px;margin-bottom:14px;display:none;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+      <div style="width:38px;height:38px;flex-shrink:0;background:rgba(249,199,79,0.12);border:1px solid rgba(249,199,79,0.25);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;">💰</div>
+      <div>
+        <h2 style="font-size:16px;font-weight:700;letter-spacing:-0.03em;">Cost estimate</h2>
+        <p style="font-size:12.5px;color:var(--text-2);margin-top:2px;">This job exceeds the $1.00 auto-proceed threshold. Review and confirm.</p>
+      </div>
+    </div>
+    <div id="cost-breakdown" style="background:var(--elevated);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:18px;font-size:13px;line-height:2;"></div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn-primary" id="cost-proceed-btn" onclick="confirmBuild()">Proceed →</button>
+      <button class="btn-ghost" onclick="cancelCostGate()" style="color:var(--error);border-color:rgba(255,107,129,0.3);">Cancel</button>
+    </div>
+  </div>
+
   <!-- Output Card -->
   <div class="card fade-in" id="output-card" style="padding:22px;display:none;">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px;">
@@ -927,8 +943,11 @@ function cycleSchedule(url) {
 function renderUrls() {
   const list = document.getElementById('url-list');
   list.innerHTML = '';
-  urls.forEach(({ url, type, schedule }) => {
+  urls.forEach(({ url, type, schedule, intention: srcIntent }) => {
     const canRecur = (type === 'channel' || type === 'playlist');
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+
     const d = document.createElement('div');
     d.className = 'pill';
 
@@ -947,8 +966,42 @@ function renderUrls() {
     removeBtn.textContent = '×';
     removeBtn.addEventListener('click', () => { removeUrl(url); });
 
+    // ── Per-source intention toggle ──
+    const intentRow = document.createElement('div');
+    intentRow.style.cssText = 'display:' + (srcIntent ? 'flex' : 'none') + ';gap:6px;padding:0 4px;';
+    const intentInput = document.createElement('input');
+    intentInput.type = 'text';
+    intentInput.placeholder = 'Focus for this source (e.g. "pricing strategies only")';
+    intentInput.value = srcIntent || '';
+    intentInput.style.cssText = 'flex:1;font-size:11.5px;padding:4px 8px;background:var(--elevated);border:1px solid var(--border);border-radius:6px;color:var(--text);';
+    intentInput.addEventListener('input', () => {
+      const entry = urls.find(u => u.url === url);
+      if (entry) entry.intention = intentInput.value;
+    });
+    intentRow.appendChild(intentInput);
+
+    const intentBtn = document.createElement('button');
+    intentBtn.title = 'Set focus intention for this source';
+    const updateIntentBtn = () => {
+      const entry = urls.find(u => u.url === url);
+      const active = !!(entry?.intention);
+      const showing = intentRow.style.display !== 'none';
+      intentBtn.textContent = showing ? '🎯' : '🎯';
+      intentBtn.style.color = active ? 'var(--brand-400)' : 'var(--text-3)';
+      intentBtn.style.borderColor = active ? 'rgba(107,79,232,0.4)' : 'var(--border)';
+    };
+    intentBtn.style.cssText = 'background:none;border:1px solid;cursor:pointer;font-size:11px;padding:2px 6px;border-radius:5px;transition:all 0.15s;';
+    updateIntentBtn();
+    intentBtn.addEventListener('click', () => {
+      const showing = intentRow.style.display !== 'none';
+      intentRow.style.display = showing ? 'none' : 'flex';
+      if (!showing) intentInput.focus();
+      updateIntentBtn();
+    });
+
     d.appendChild(badge);
     d.appendChild(label);
+    d.appendChild(intentBtn);
 
     if (canRecur) {
       const schedBtn = document.createElement('button');
@@ -966,7 +1019,9 @@ function renderUrls() {
     }
 
     d.appendChild(removeBtn);
-    list.appendChild(d);
+    wrap.appendChild(d);
+    wrap.appendChild(intentRow);
+    list.appendChild(wrap);
   });
 }
 
@@ -1125,6 +1180,7 @@ async function startBuild() {
   showError('');
   document.getElementById('output-card').style.display         = 'none';
   document.getElementById('persona-output-card').style.display = 'none';
+  document.getElementById('cost-card').style.display           = 'none';
   document.getElementById('progress-card').style.display       = 'block';
   document.getElementById('log-container').innerHTML = '';
   document.getElementById('progress-spinner').style.display = 'inline-block';
@@ -1147,6 +1203,7 @@ async function startBuild() {
         intention,
         files,
         watch_sources: urls.filter(u => u.schedule).map(u => ({ url: u.url, schedule: u.schedule })),
+        source_intentions: Object.fromEntries(urls.filter(u => u.intention).map(u => [u.url, u.intention])),
       }),
     });
     const data = await res.json();
@@ -1216,6 +1273,13 @@ function streamProgress(jobId) {
       }
       if (msg.type === 'summarize_progress') {
         setSummarizeProgress(msg.current, msg.total);
+        return;
+      }
+      if (msg.type === 'cost_estimate') {
+        intentionallyClosed = true;
+        es.close(); currentEventSource = null;
+        showCostGate(msg, jobId);
+        resetBuildUI();
         return;
       }
       if (msg.type === 'needs_input') {
@@ -1405,6 +1469,60 @@ async function installSkill() {
     banner.style.color      = 'var(--error)';
     banner.textContent = `Error: ${data.error}`;
   }
+}
+
+// ── Cost estimate gate ───────────────────────────────────
+function showCostGate(msg, jobId) {
+  document.getElementById('progress-spinner').style.display = 'none';
+  document.getElementById('progress-title').textContent = 'Cost approval needed';
+
+  const fmt = v => '$' + v.toFixed(4);
+  const breakdown = document.getElementById('cost-breakdown');
+  breakdown.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr auto;gap:4px 24px;color:var(--text-2);">
+      <span>Haiku summarization (already done)</span><span style="color:var(--text);font-family:var(--font-mono);">${fmt(msg.haiku_cost)}</span>
+      <span>Opus skill generation (${msg.batches} batch${msg.batches !== 1 ? 'es' : ''})</span><span style="color:var(--text);font-family:var(--font-mono);">${fmt(msg.opus_cost)}</span>
+      <span style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px;font-weight:600;color:var(--text);">Total estimate</span>
+      <span style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px;font-weight:700;font-family:var(--font-mono);color:var(--warn);">${fmt(msg.total_cost)}</span>
+    </div>
+    <p style="margin-top:10px;font-size:12px;color:var(--text-3);">Using ${msg.sources} of ${msg.total_sources} ranked sources · est. ${Math.round(msg.estimated_secs / 60)} min</p>`;
+
+  const card = document.getElementById('cost-card');
+  card.dataset.jobId = jobId;
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function confirmBuild() {
+  const card = document.getElementById('cost-card');
+  const jobId = card.dataset.jobId;
+  const btn = document.getElementById('cost-proceed-btn');
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+
+  const res = await fetch('/confirm/' + jobId, { method: 'POST' });
+  if (!res.ok) {
+    btn.disabled = false;
+    btn.textContent = 'Proceed →';
+    showError('Could not resume build. The job may have expired.');
+    return;
+  }
+  card.style.display = 'none';
+  document.getElementById('progress-spinner').style.display = 'inline-block';
+  document.getElementById('progress-title').textContent = 'Building skill...';
+  document.getElementById('build-btn').disabled = true;
+  document.getElementById('stop-btn').style.display = 'inline-flex';
+  streamProgress(jobId);
+}
+
+function cancelCostGate() {
+  const card = document.getElementById('cost-card');
+  const jobId = card.dataset.jobId;
+  if (jobId) fetch('/cancel/' + jobId, { method: 'POST' });
+  card.style.display = 'none';
+  document.getElementById('progress-spinner').style.display = 'none';
+  document.getElementById('progress-title').textContent = 'Cancelled';
+  addLog('Build cancelled at cost gate.', 'info');
 }
 
 // ── Contradiction questions ──────────────────────────────
