@@ -26,10 +26,15 @@ from bs4 import BeautifulSoup
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
-    from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
+    from youtube_transcript_api._errors import (
+        TranscriptsDisabled, NoTranscriptFound,
+        IpBlocked, RequestBlocked, VideoUnavailable,
+        CouldNotRetrieveTranscript,
+    )
     TRANSCRIPT_API = True
 except ImportError:
     TRANSCRIPT_API = False
+    IpBlocked = RequestBlocked = VideoUnavailable = CouldNotRetrieveTranscript = Exception
 
 try:
     import yt_dlp
@@ -156,17 +161,21 @@ def get_channel_title(url):
 # Transcript extraction
 # ──────────────────────────────────────────────
 
+# Track if YouTube has blocked this session's IP — skip transcript-api for remaining videos
+_ip_blocked = False
+
+
 def get_transcript_text(video_id, verbose=False):
     """
     Try youtube-transcript-api first (cleanest text).
     Fall back to yt-dlp auto-subtitle extraction.
     Returns (text, method) or (None, reason).
     """
-    # Method 1: youtube-transcript-api
-    # Supports both old API (class methods) and new API (instance methods, v0.7+)
-    if TRANSCRIPT_API:
+    global _ip_blocked
+
+    # Method 1: youtube-transcript-api (skipped if IP is already known blocked)
+    if TRANSCRIPT_API and not _ip_blocked:
         try:
-            # New API (v0.7+): instantiate first
             ytt = YouTubeTranscriptApi()
             transcript_list = ytt.list(video_id)
 
@@ -197,15 +206,25 @@ def get_transcript_text(video_id, verbose=False):
                 text = " ".join(_text(e) for e in entries)
                 return text, "transcript-api"
 
-        except (TranscriptsDisabled, NoTranscriptFound):
-            pass
+        except (IpBlocked, RequestBlocked):
+            _ip_blocked = True
+            if verbose:
+                print(f"    YouTube IP block detected — switching to yt-dlp for remaining videos", flush=True)
+        except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable):
+            return None, "no-transcript-available"
+        except CouldNotRetrieveTranscript as e:
+            msg = str(e).lower()
+            if "blocked" in msg or "ip" in msg:
+                _ip_blocked = True
+            elif verbose:
+                print(f"    transcript-api: {e}", flush=True)
         except Exception as e:
             if verbose:
-                print(f"    transcript-api error: {e}", flush=True)
+                print(f"    transcript-api error: {type(e).__name__}: {e}", flush=True)
 
     # Method 2: yt-dlp subtitle extraction
     if YTDLP:
-        import tempfile, os
+        import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             ydl_opts = {
                 "quiet": True,
@@ -222,12 +241,12 @@ def get_transcript_text(video_id, verbose=False):
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
 
-                # Find the .vtt file
                 vtt_files = list(Path(tmpdir).glob("*.vtt"))
                 if vtt_files:
                     raw = vtt_files[0].read_text(encoding="utf-8", errors="ignore")
                     text = parse_vtt(raw)
-                    return text, "yt-dlp-vtt"
+                    if text.strip():
+                        return text, "yt-dlp-vtt"
             except Exception as e:
                 if verbose:
                     print(f"    yt-dlp subtitle error: {e}", flush=True)
@@ -268,6 +287,9 @@ def fetch_youtube_collection(url, max_videos=50, verbose=True, intention="", log
     Fetch transcripts from a playlist or channel, optionally filtered by intention.
     log_fn(dict) is called with SSE-style message dicts for progress reporting.
     """
+    global _ip_blocked
+    _ip_blocked = False  # reset per collection so a new job doesn't inherit a stale block
+
     def _log(msg, kind="info"):
         if log_fn:
             log_fn({"type": kind, "message": msg})
@@ -326,7 +348,8 @@ def fetch_youtube_collection(url, max_videos=50, verbose=True, intention="", log
             success += 1
             _log(f"[{i}/{total}] Got: {title[:55]} ({len(text):,} chars)", "success")
         else:
-            _log(f"[{i}/{total}] No transcript: {title[:55]}", "info")
+            suffix = " (YouTube IP block — switching to yt-dlp)" if _ip_blocked else ""
+            _log(f"[{i}/{total}] No transcript: {title[:55]}{suffix}", "info")
 
         if log_fn:
             log_fn({"type": "progress", "current": i, "total": total})
