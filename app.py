@@ -18,7 +18,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request, send_file, stream_with_context
+from flask import Flask, Response, jsonify, redirect, render_template, request, send_file, stream_with_context
 
 # Use bundled scripts/ dir (works locally and on Railway)
 SKILL_SCRIPTS = Path(__file__).parent / "scripts"
@@ -26,6 +26,16 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 
 app = Flask(__name__)
 jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, error}
+
+# Force HTTPS in production (Railway sets RAILWAY_ENVIRONMENT)
+# Railway terminates SSL at the proxy, so check X-Forwarded-Proto header
+@app.before_request
+def redirect_to_https():
+    if os.getenv("RAILWAY_ENVIRONMENT"):
+        proto = request.headers.get("X-Forwarded-Proto", "http")
+        if proto == "http":
+            url = request.url.replace("http://", "https://", 1)
+            return redirect(url, code=301)
 
 # Drafts directory — persists within a Railway session (survives browser refresh/disconnect)
 # Uses Railway volume if mounted, otherwise /tmp
