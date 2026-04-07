@@ -176,35 +176,47 @@ def get_transcript_text(video_id, verbose=False):
     # Method 1: youtube-transcript-api (skipped if IP is already known blocked)
     if TRANSCRIPT_API and not _ip_blocked:
         try:
-            ytt = YouTubeTranscriptApi()
-            transcript_list = ytt.list(video_id)
+            import concurrent.futures
+            def _fetch_via_api():
+                ytt = YouTubeTranscriptApi()
+                transcript_list = ytt.list(video_id)
 
-            # Priority: manual English > auto English > any available
-            transcript = None
-            for lang in ["en", "en-US", "en-GB"]:
-                try:
-                    transcript = transcript_list.find_manually_created_transcript([lang])
-                    break
-                except Exception:
-                    pass
-            if transcript is None:
+                transcript = None
                 for lang in ["en", "en-US", "en-GB"]:
                     try:
-                        transcript = transcript_list.find_generated_transcript([lang])
+                        transcript = transcript_list.find_manually_created_transcript([lang])
                         break
                     except Exception:
                         pass
-            if transcript is None:
-                for t in transcript_list:
-                    transcript = t
-                    break
+                if transcript is None:
+                    for lang in ["en", "en-US", "en-GB"]:
+                        try:
+                            transcript = transcript_list.find_generated_transcript([lang])
+                            break
+                        except Exception:
+                            pass
+                if transcript is None:
+                    for t in transcript_list:
+                        transcript = t
+                        break
 
-            if transcript is not None:
-                entries = transcript.fetch()
-                def _text(e):
-                    return e["text"] if isinstance(e, dict) else e.text
-                text = " ".join(_text(e) for e in entries)
-                return text, "transcript-api"
+                if transcript is not None:
+                    entries = transcript.fetch()
+                    def _text(e):
+                        return e["text"] if isinstance(e, dict) else e.text
+                    return " ".join(_text(e) for e in entries)
+                return None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_fetch_via_api)
+                try:
+                    text = future.result(timeout=20)  # 20s max per video
+                    if text:
+                        return text, "transcript-api"
+                except concurrent.futures.TimeoutError:
+                    _ip_blocked = True  # hung = likely throttled, skip API for rest
+                    if verbose:
+                        print(f"    transcript-api timed out — switching to yt-dlp", flush=True)
 
         except (IpBlocked, RequestBlocked):
             _ip_blocked = True
@@ -222,34 +234,43 @@ def get_transcript_text(video_id, verbose=False):
             if verbose:
                 print(f"    transcript-api error: {type(e).__name__}: {e}", flush=True)
 
-    # Method 2: yt-dlp subtitle extraction
+    # Method 2: yt-dlp subtitle extraction (30s timeout)
     if YTDLP:
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "skip_download": True,
-                "writeautomaticsub": True,
-                "writesubtitles": True,
-                "subtitleslangs": ["en"],
-                "subtitlesformat": "vtt",
-                "outtmpl": str(Path(tmpdir) / "%(id)s.%(ext)s"),
-            }
-            try:
+        import tempfile, concurrent.futures
+        def _fetch_via_ytdlp():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ydl_opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "skip_download": True,
+                    "writeautomaticsub": True,
+                    "writesubtitles": True,
+                    "subtitleslangs": ["en"],
+                    "subtitlesformat": "vtt",
+                    "outtmpl": str(Path(tmpdir) / "%(id)s.%(ext)s"),
+                    "socket_timeout": 15,
+                }
                 url = f"https://www.youtube.com/watch?v={video_id}"
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
-
                 vtt_files = list(Path(tmpdir).glob("*.vtt"))
                 if vtt_files:
                     raw = vtt_files[0].read_text(encoding="utf-8", errors="ignore")
-                    text = parse_vtt(raw)
-                    if text.strip():
-                        return text, "yt-dlp-vtt"
-            except Exception as e:
-                if verbose:
-                    print(f"    yt-dlp subtitle error: {e}", flush=True)
+                    return parse_vtt(raw)
+                return None
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_fetch_via_ytdlp)
+                text = future.result(timeout=30)
+                if text and text.strip():
+                    return text, "yt-dlp-vtt"
+        except concurrent.futures.TimeoutError:
+            if verbose:
+                print(f"    yt-dlp timed out for {video_id}", flush=True)
+        except Exception as e:
+            if verbose:
+                print(f"    yt-dlp subtitle error: {e}", flush=True)
 
     return None, "no-transcript-available"
 
