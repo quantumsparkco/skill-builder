@@ -392,12 +392,13 @@
     <!-- LINKS TAB -->
     <div id="tab-urls" class="tab-panel active">
       <span class="field-label">Add URLs</span>
-      <div style="display:flex;gap:8px;margin-bottom:8px;">
-        <input type="text" id="url-input"
-          placeholder="YouTube channel, playlist, video — or any website URL"
-          onkeydown="if(event.key==='Enter'){event.preventDefault();addUrl()}"
-          style="flex:1;" />
-        <button class="btn-ghost" onclick="addUrl()" style="white-space:nowrap;padding:9px 16px;">Add</button>
+      <div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start;">
+        <textarea id="url-input" rows="2"
+          placeholder="Paste one or more URLs — YouTube channels, playlists, videos, or websites. One per line or comma-separated."
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();addUrl()}"
+          oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"
+          style="flex:1;resize:none;overflow:hidden;min-height:38px;line-height:1.5;"></textarea>
+        <button class="btn-ghost" onclick="addUrl()" style="white-space:nowrap;padding:9px 16px;margin-top:1px;">Add</button>
       </div>
       <p style="font-size:11.5px;color:var(--text-3);margin-bottom:12px;">
         youtube.com/@channel · /playlist?list= · /watch?v= · youtu.be/ · any https:// URL
