@@ -62,7 +62,7 @@ class _BufQueue:
 BATCH_SIZE = 35_000          # chars per Opus batch
 CONTENT_BUDGET = 60_000      # max chars of summarized content sent to Opus
 SUMMARY_MAX_INPUT = 15_000   # max chars of raw content fed to Haiku per source
-MAX_PRE_SUMMARIZE = 300      # hard cap on sources sent to Haiku (ranked by title relevance first)
+MAX_PRE_SUMMARIZE = 150      # hard cap on sources sent to Haiku — 150 × ~4s = ~10 min max
 
 # Haiku pricing: $0.80/M input, $4/M output (approx)
 # Opus pricing:  $15/M input, $75/M output (approx)
@@ -70,7 +70,7 @@ HAIKU_INPUT_COST_PER_CHAR  = 0.80  / 1_000_000
 HAIKU_OUTPUT_COST_PER_CHAR = 4.00  / 1_000_000
 OPUS_INPUT_COST_PER_CHAR   = 15.0  / 1_000_000
 OPUS_OUTPUT_COST_PER_CHAR  = 75.0  / 1_000_000
-SUMMARY_OUTPUT_CHARS = 1_500   # expected output chars per Haiku summary
+SUMMARY_OUTPUT_CHARS = 800   # realistic chars per Haiku summary (max_tokens=600 ≈ 800 chars)
 
 SUMMARIZE_PROMPT = """\
 You are extracting the most valuable knowledge from source material for a skill-building system.
@@ -1087,7 +1087,11 @@ def confirm_build(job_id):
     if job.get("status") != "awaiting_confirmation":
         return jsonify({"error": "Job is not awaiting confirmation"}), 400
 
-    all_parts = job.pop("pending_parts", [])
+    all_parts = job.get("pending_parts")
+    if not all_parts:
+        # Already confirmed — guard against double-click / double-reload
+        return jsonify({"error": "Already confirmed or no pending content"}), 400
+    job.pop("pending_parts")
     sources   = job.get("sources", [])
     intention = job.get("intention", "")
     q         = job["queue"]

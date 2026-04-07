@@ -797,6 +797,7 @@ let countdownSecs   = null;   // null = no estimate yet, counts up; number = cou
 let totalVideos     = 0;
 let completedVideos = 0;
 let itemStartTimes  = [];     // timestamps when each item started, for pace estimation
+let summarizePhaseStarted = false;  // once true, ignore fetch total/progress events
 
 function startTimer() {
   timerStart      = Date.now();
@@ -1263,6 +1264,7 @@ async function startBuild() {
   document.getElementById('persona-output-card').style.display = 'none';
   document.getElementById('cost-card').style.display           = 'none';
   document.getElementById('progress-card').style.display       = 'none';
+  summarizePhaseStarted = false;
   document.getElementById('log-container').innerHTML           = '';
   document.getElementById('inline-log').innerHTML              = '';
   document.getElementById('inline-bars').innerHTML             = '';
@@ -1323,12 +1325,13 @@ function resetBuildUI() {
 
 function handleMsg(msg, jobId, stopFn) {
   if (msg.type === 'ping') return;
-  if (msg.type === 'total')            { setTotal(msg.count, msg.estimated_secs); return; }
-  if (msg.type === 'progress')         { setProgress(msg.current, msg.total); return; }
+  // Ignore per-video fetch progress once summarize phase has started
+  if (msg.type === 'total')    { if (!summarizePhaseStarted) setTotal(msg.count, msg.estimated_secs); return; }
+  if (msg.type === 'progress') { if (!summarizePhaseStarted) setProgress(msg.current, msg.total); return; }
   if (msg.type === 'batch_total')      { setBatchTotal(msg.count, msg.estimated_secs); return; }
   if (msg.type === 'batch_progress')   { setBatchProgress(msg.current, msg.total); return; }
   if (msg.type === 'batch_done')       { updateInlineBar('batch', msg.batch, msg.total, `Batch ${msg.batch} / ${msg.total} saved ✓`); return; }
-  if (msg.type === 'summarize_total')  { setSummarizeTotal(msg.count); return; }
+  if (msg.type === 'summarize_total')  { summarizePhaseStarted = true; setSummarizeTotal(msg.count); return; }
   if (msg.type === 'summarize_progress') { setSummarizeProgress(msg.current, msg.total); return; }
   if (msg.type === 'cost_estimate') {
     stopFn();
@@ -1686,6 +1689,7 @@ async function resumeLastJob() {
   if (!lastJobId) return;
   hideDraftsBanner();
   currentJobId = lastJobId;
+  summarizePhaseStarted = false;
   document.getElementById('inline-log').innerHTML = '';
   document.getElementById('inline-bars').innerHTML = '';
   document.getElementById('inline-current-text').textContent = 'Reconnecting...';
