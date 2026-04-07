@@ -1447,11 +1447,15 @@ function addLog(message, kind) {
 
   // ── Inline progress section ──
   const current = document.getElementById('inline-current-text');
+  // Messages that are connection/meta noise — don't show in inline view at all
+  const isMeta = /Connection dropped|reconnecting|polling mode|still running/i.test(message);
+
   const inlineLog = document.getElementById('inline-log');
-  if (current && inlineLog) {
-    // Move previous "current" into the cascading log as a completed item
+  if (current && inlineLog && !isMeta) {
+    // Move previous "current" into the cascading log only if it was a real action
     const prev = current.textContent;
-    if (prev && prev !== message) {
+    const prevIsMeta = /Connection dropped|reconnecting|polling mode|still running|✓ Done/i.test(prev);
+    if (prev && prev !== message && !prevIsMeta) {
       const done = document.createElement('div');
       done.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:2px 0;';
       const checkColor = kind === 'error' ? 'var(--error)' : 'var(--success)';
