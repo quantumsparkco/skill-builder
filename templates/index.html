@@ -1236,11 +1236,87 @@ function resetBuildUI() {
   document.getElementById('progress-bar-wrap').style.display = 'none';
 }
 
+function handleMsg(msg, jobId, stopFn) {
+  if (msg.type === 'ping') return;
+  if (msg.type === 'total')            { setTotal(msg.count, msg.estimated_secs); return; }
+  if (msg.type === 'progress')         { setProgress(msg.current, msg.total); return; }
+  if (msg.type === 'batch_total')      { setBatchTotal(msg.count, msg.estimated_secs); return; }
+  if (msg.type === 'batch_progress')   { setBatchProgress(msg.current, msg.total); return; }
+  if (msg.type === 'summarize_total')  { setSummarizeTotal(msg.count); return; }
+  if (msg.type === 'summarize_progress') { setSummarizeProgress(msg.current, msg.total); return; }
+  if (msg.type === 'cost_estimate') {
+    stopFn();
+    showCostGate(msg, jobId);
+    resetBuildUI();
+    return;
+  }
+  if (msg.type === 'needs_input') {
+    stopFn();
+    showQuestions(msg.questions, jobId);
+    resetBuildUI();
+    return;
+  }
+  if (msg.type === 'complete') {
+    stopFn();
+    if (totalVideos > 0) updateProgressBar(totalVideos, totalVideos);
+    setTimeout(() => {
+      resetBuildUI();
+      msg.skill_name ? loadResult(jobId) : (() => {
+        document.getElementById('progress-spinner').style.display = 'none';
+        document.getElementById('progress-title').textContent = 'Build failed';
+      })();
+    }, 400);
+    return;
+  }
+  addLog(msg.message, msg.type);
+}
+
+function startPolling(jobId) {
+  let since = 0;
+  let done = false;
+  addLog('Switched to polling mode — build is still running...', 'info');
+
+  async function poll() {
+    if (done) return;
+    try {
+      const res = await fetch(`/poll/${jobId}?since=${since}`);
+      if (!res.ok) { setTimeout(poll, 3000); return; }
+      const data = await res.json();
+      for (const msg of data.messages) {
+        handleMsg(msg, jobId, () => { done = true; });
+        if (done) return;
+      }
+      since = data.total;
+      if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+        if (!done) {
+          done = true;
+          loadResult(jobId);
+        }
+        return;
+      }
+      // Check for awaiting_confirmation or needs_input via status
+      if (data.status === 'awaiting_confirmation') {
+        // The cost_estimate message is already in the buffer — it was handled above
+        return;
+      }
+    } catch(e) { /* network glitch, retry */ }
+    setTimeout(poll, 3000);
+  }
+
+  poll();
+}
+
 function streamProgress(jobId) {
-  let reconnectTimer = null;
   let intentionallyClosed = false;
   let reconnectAttempts = 0;
-  const MAX_RECONNECTS = 60;
+  let reconnectTimer = null;
+  const MAX_SSE_ATTEMPTS = 5; // give up on SSE quickly, fall back to polling
+
+  function stopSSE() {
+    intentionallyClosed = true;
+    if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  }
 
   function connect() {
     if (intentionallyClosed) return;
@@ -1248,77 +1324,25 @@ function streamProgress(jobId) {
     currentEventSource = es;
 
     es.onmessage = e => {
-      reconnectAttempts = 0; // reset on successful message
+      reconnectAttempts = 0;
       const msg = JSON.parse(e.data);
-      if (msg.type === 'ping') return;
-      if (msg.type === 'total') {
-        setTotal(msg.count, msg.estimated_secs);
-        return;
-      }
-      if (msg.type === 'progress') {
-        setProgress(msg.current, msg.total);
-        return;
-      }
-      if (msg.type === 'batch_total') {
-        setBatchTotal(msg.count, msg.estimated_secs);
-        return;
-      }
-      if (msg.type === 'batch_progress') {
-        setBatchProgress(msg.current, msg.total);
-        return;
-      }
-      if (msg.type === 'summarize_total') {
-        setSummarizeTotal(msg.count);
-        return;
-      }
-      if (msg.type === 'summarize_progress') {
-        setSummarizeProgress(msg.current, msg.total);
-        return;
-      }
-      if (msg.type === 'cost_estimate') {
-        intentionallyClosed = true;
-        es.close(); currentEventSource = null;
-        showCostGate(msg, jobId);
-        resetBuildUI();
-        return;
-      }
-      if (msg.type === 'needs_input') {
-        intentionallyClosed = true;
-        es.close(); currentEventSource = null;
-        showQuestions(msg.questions, jobId);
-        resetBuildUI();
-        return;
-      }
-      if (msg.type === 'complete') {
-        intentionallyClosed = true;
-        es.close(); currentEventSource = null;
-        if (totalVideos > 0) updateProgressBar(totalVideos, totalVideos);
-        setTimeout(() => {
-          resetBuildUI();
-          msg.skill_name ? loadResult(jobId) : (() => {
-            document.getElementById('progress-spinner').style.display = 'none';
-            document.getElementById('progress-title').textContent = 'Build failed';
-          })();
-        }, 400);
-        return;
-      }
-      addLog(msg.message, msg.type);
+      handleMsg(msg, jobId, stopSSE);
     };
 
-  es.onerror = () => {
-    es.close();
-    currentEventSource = null;
-    if (intentionallyClosed) return;
-    reconnectAttempts++;
-    if (reconnectAttempts > MAX_RECONNECTS) {
-      addLog('Connection lost and could not reconnect. The build may still be running — refresh the page to check.', 'error');
-      resetBuildUI();
-      return;
-    }
-    const delay = Math.min(1000 * reconnectAttempts, 10000);
-    addLog(`Connection dropped — reconnecting in ${Math.round(delay/1000)}s... (attempt ${reconnectAttempts})`, 'info');
-    reconnectTimer = setTimeout(connect, delay);
-  };
+    es.onerror = () => {
+      es.close();
+      currentEventSource = null;
+      if (intentionallyClosed) return;
+      reconnectAttempts++;
+      if (reconnectAttempts > MAX_SSE_ATTEMPTS) {
+        // SSE unreliable on this connection — fall back to polling
+        startPolling(jobId);
+        return;
+      }
+      const delay = Math.min(1000 * reconnectAttempts, 5000);
+      addLog(`Connection dropped — reconnecting in ${Math.round(delay/1000)}s... (attempt ${reconnectAttempts})`, 'info');
+      reconnectTimer = setTimeout(connect, delay);
+    };
   }
 
   connect();

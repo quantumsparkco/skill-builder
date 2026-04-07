@@ -685,6 +685,7 @@ def build():
     jobs[job_id] = {
         "status": "running",
         "queue": queue.Queue(),
+        "log_buffer": [],
         "result": None, "zip_path": None,
         "skill_dir": None, "skill_name": None, "error": None,
         "cancelled": False,
@@ -727,6 +728,7 @@ def build_persona_route():
     jobs[job_id] = {
         "status": "running",
         "queue": queue.Queue(),
+        "log_buffer": [],
         "result": None, "zip_path": None,
         "skill_dir": None, "skill_name": None, "error": None,
         "job_type": "persona",
@@ -749,9 +751,11 @@ def stream(job_id):
 
     def generate():
         q = jobs[job_id]["queue"]
+        buf = jobs[job_id]["log_buffer"]
         while True:
             try:
                 msg = q.get(timeout=15)
+                buf.append(msg)
                 yield f"data: {json.dumps(msg)}\n\n"
                 if msg.get("type") == "complete":
                     break
@@ -763,6 +767,21 @@ def stream(job_id):
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/poll/<job_id>")
+def poll(job_id):
+    """Polling fallback: returns buffered log messages since index N."""
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    since = int(request.args.get("since", 0))
+    buf = job.get("log_buffer", [])
+    return jsonify({
+        "messages": buf[since:],
+        "total": len(buf),
+        "status": job.get("status"),
+    })
 
 
 @app.route("/result/<job_id>")
