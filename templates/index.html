@@ -1240,7 +1240,7 @@ function streamProgress(jobId) {
   let reconnectTimer = null;
   let intentionallyClosed = false;
   let reconnectAttempts = 0;
-  const MAX_RECONNECTS = 20;
+  const MAX_RECONNECTS = 60;
 
   function connect() {
     if (intentionallyClosed) return;
@@ -1476,7 +1476,7 @@ function showCostGate(msg, jobId) {
   document.getElementById('progress-spinner').style.display = 'none';
   document.getElementById('progress-title').textContent = 'Cost approval needed';
 
-  const fmt = v => '$' + v.toFixed(4);
+  const fmt = v => '$' + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
   const breakdown = document.getElementById('cost-breakdown');
   breakdown.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr auto;gap:4px 24px;color:var(--text-2);">

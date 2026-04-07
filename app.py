@@ -35,6 +35,7 @@ jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, 
 BATCH_SIZE = 35_000          # chars per Opus batch
 CONTENT_BUDGET = 60_000      # max chars of summarized content sent to Opus
 SUMMARY_MAX_INPUT = 15_000   # max chars of raw content fed to Haiku per source
+MAX_PRE_SUMMARIZE = 300      # hard cap on sources sent to Haiku (ranked by title relevance first)
 
 # Haiku pricing: $0.80/M input, $4/M output (approx)
 # Opus pricing:  $15/M input, $75/M output (approx)
@@ -129,14 +130,29 @@ def _score_summary(summary, intention):
     return sum(text.count(kw) for kw in keywords)
 
 
+def _title_score(title, intention):
+    """Quick keyword relevance score on title alone (no Haiku needed)."""
+    if not intention:
+        return 1
+    import re as _re
+    stop = {"a","an","the","and","or","but","in","on","at","to","for","of","with",
+            "by","from","as","is","are","was","were","be","been","have","has","had",
+            "do","does","did","will","would","could","should","i","we","you","they","it"}
+    keywords = [w for w in _re.findall(r'\b[a-z]{3,}\b', intention.lower()) if w not in stop]
+    if not keywords:
+        return 1
+    text = title.lower()
+    return sum(text.count(kw) for kw in keywords)
+
+
 def run_build(job_id, sources, max_videos, raw_text, intention=""):
     """
     Pipeline:
-    1. Fetch all transcripts (free)
-    2. Haiku summarizes every source to ~300 words (cheap)
-    3. Rank summaries by relevance score against intention
-    4. Fill CONTENT_BUDGET with top-ranked summaries
-    5. Show cost estimate → wait for user confirmation
+    1. Fetch all content (free)
+    2. Pre-rank by title relevance, cap at MAX_PRE_SUMMARIZE
+    3. Cost estimate gate (before Haiku spend) → user confirms or cancels
+    4. Haiku summarizes the capped set
+    5. Re-rank summaries, fill CONTENT_BUDGET
     6. Opus builds skill from budget content
     """
     q = jobs[job_id]["queue"]
@@ -211,12 +227,71 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         if jobs[job_id].get("cancelled"):
             return
 
-        # ── Phase 2: Haiku summarizes every source ────────────────────────────
-        total_raw = sum(len(p["content"]) for p in all_parts)
-        log(f"Summarizing {len(all_parts)} sources ({total_raw:,} raw chars) with Haiku...")
+        # ── Phase 2: Pre-rank by title relevance, cap at MAX_PRE_SUMMARIZE ───
+        total_fetched = len(all_parts)
+        if len(all_parts) > MAX_PRE_SUMMARIZE:
+            # Score by title keywords first (free) so we keep the most relevant
+            for part in all_parts:
+                part["title_score"] = _title_score(part["title"], intention)
+            all_parts.sort(key=lambda p: -p["title_score"])
+            all_parts = all_parts[:MAX_PRE_SUMMARIZE]
+            log(f"Large source set: kept top {MAX_PRE_SUMMARIZE} of {total_fetched} sources by title relevance", "info")
+
+        # ── Phase 3: Cost estimate gate (BEFORE spending on Haiku) ───────────
+        total_raw = sum(min(len(p["content"]), SUMMARY_MAX_INPUT) for p in all_parts)
+        haiku_input_chars  = total_raw
+        haiku_output_chars = len(all_parts) * SUMMARY_OUTPUT_CHARS
+        haiku_cost = (haiku_input_chars * HAIKU_INPUT_COST_PER_CHAR +
+                      haiku_output_chars * HAIKU_OUTPUT_COST_PER_CHAR)
+
+        # Estimate Opus cost from budget (worst case: full CONTENT_BUDGET)
+        est_budget = min(len(all_parts) * SUMMARY_OUTPUT_CHARS, CONTENT_BUDGET)
+        est_batches = max(1, est_budget // BATCH_SIZE + 1)
+        opus_input_chars  = est_budget + 10_000
+        opus_output_chars = est_batches * 6_000
+        opus_cost = (opus_input_chars * OPUS_INPUT_COST_PER_CHAR +
+                     opus_output_chars * OPUS_OUTPUT_COST_PER_CHAR)
+
+        total_cost = haiku_cost + opus_cost
+        est_secs   = len(all_parts) * 3 + est_batches * 45 + 30
+
+        q.put({
+            "type": "cost_estimate",
+            "sources": len(all_parts),
+            "total_sources": total_fetched,
+            "batches": est_batches,
+            "haiku_cost": round(haiku_cost, 4),
+            "opus_cost": round(opus_cost, 4),
+            "total_cost": round(total_cost, 4),
+            "estimated_secs": est_secs,
+        })
+
+        if total_cost > 1.00:
+            jobs[job_id]["status"] = "awaiting_confirmation"
+            jobs[job_id]["pending_parts"] = all_parts
+            jobs[job_id]["pending_source_url"] = sources[0] if sources else ""
+            return  # Frontend must POST /confirm/<job_id> to continue
+
+        # Under $1 — proceed automatically
+        _run_summarize_and_opus(job_id, all_parts, sources, intention, q, log)
+
+    except Exception as e:
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["error"] = str(e)
+        log(f"Error: {e}", "error")
+        q.put({"type": "complete", "skill_name": None})
+
+
+def _run_summarize_and_opus(job_id, all_parts, sources, intention, q, log):
+    """Phases 4-6: Haiku summarize → rank → fill budget → Opus build."""
+    import anthropic
+    client = anthropic.Anthropic()
+
+    try:
+        # ── Phase 4: Haiku summarizes the capped set ──────────────────────────
+        log(f"Summarizing {len(all_parts)} sources with Haiku...")
         q.put({"type": "summarize_total", "count": len(all_parts)})
 
-        client = anthropic.Anthropic()
         for i, part in enumerate(all_parts, 1):
             if jobs[job_id].get("cancelled"):
                 return
@@ -229,13 +304,12 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
 
         log(f"Summarization complete — {len(all_parts)} sources distilled", "success")
 
-        # ── Phase 3: Rank by relevance ────────────────────────────────────────
+        # ── Phase 5: Re-rank summaries, fill content budget ───────────────────
         for part in all_parts:
             part["score"] = _score_summary(part["summary"], intention)
 
         ranked = sorted(all_parts, key=lambda p: -p["score"])
 
-        # ── Phase 4: Fill content budget ──────────────────────────────────────
         selected = []
         budget_used = 0
         for part in ranked:
@@ -247,45 +321,11 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
                 break
 
         skipped = len(all_parts) - len(selected)
-        log(f"Selected top {len(selected)} sources ({budget_used:,} chars) — {skipped} lower-relevance sources excluded", "info")
-
-        # ── Phase 5: Cost estimate + confirmation gate ────────────────────────
-        haiku_input_chars  = total_raw
-        haiku_output_chars = len(all_parts) * SUMMARY_OUTPUT_CHARS
-        haiku_cost = (haiku_input_chars * HAIKU_INPUT_COST_PER_CHAR +
-                      haiku_output_chars * HAIKU_OUTPUT_COST_PER_CHAR)
+        log(f"Selected top {len(selected)} sources ({budget_used:,} chars) — {skipped} lower-relevance excluded", "info")
 
         batches = _make_batches([{**p, "content": p["summary"]} for p in selected])
-        n_batches = len(batches)
-        opus_input_chars  = budget_used + 10_000  # +10k for system prompt/knowledge base
-        opus_output_chars = n_batches * 6_000
-        opus_cost = (opus_input_chars * OPUS_INPUT_COST_PER_CHAR +
-                     opus_output_chars * OPUS_OUTPUT_COST_PER_CHAR)
 
-        total_cost = haiku_cost + opus_cost
-        est_secs   = len(all_parts) * 3 + n_batches * 45 + 30
-
-        q.put({
-            "type": "cost_estimate",
-            "sources": len(selected),
-            "total_sources": len(all_parts),
-            "batches": n_batches,
-            "haiku_cost": round(haiku_cost, 2),
-            "opus_cost": round(opus_cost, 2),
-            "total_cost": round(total_cost, 2),
-            "estimated_secs": est_secs,
-        })
-
-        # Wait for user confirmation (or auto-proceed if under $1)
-        if total_cost > 1.00:
-            jobs[job_id]["status"] = "awaiting_confirmation"
-            jobs[job_id]["pending_selected"] = selected
-            jobs[job_id]["pending_batches"] = batches
-            jobs[job_id]["pending_source_title"] = "Combined: " + ", ".join(p["title"][:20] for p in selected[:3])
-            jobs[job_id]["pending_source_url"] = sources[0] if sources else ""
-            return  # Frontend must POST /confirm/<job_id> to continue
-
-        # Under $1 — proceed automatically
+        # ── Phase 6: Opus ─────────────────────────────────────────────────────
         _run_opus_phase(job_id, selected, batches, sources, intention, q, log, client)
 
     except Exception as e:
@@ -711,7 +751,7 @@ def stream(job_id):
         q = jobs[job_id]["queue"]
         while True:
             try:
-                msg = q.get(timeout=120)
+                msg = q.get(timeout=15)
                 yield f"data: {json.dumps(msg)}\n\n"
                 if msg.get("type") == "complete":
                     break
@@ -905,19 +945,18 @@ def confirm_build(job_id):
     if job.get("status") != "awaiting_confirmation":
         return jsonify({"error": "Job is not awaiting confirmation"}), 400
 
-    selected  = job.pop("pending_selected", [])
-    batches   = job.pop("pending_batches", [])
+    all_parts = job.pop("pending_parts", [])
     sources   = job.get("sources", [])
     intention = job.get("intention", "")
     q         = job["queue"]
 
     job["status"] = "running"
 
-    import anthropic as _anthropic
-    client = _anthropic.Anthropic()
+    def _log(m, k="info"):
+        q.put({"type": k, "message": m})
 
     def _resume():
-        _run_opus_phase(job_id, selected, batches, sources, intention, q, lambda m, k="info": q.put({"type": k, "message": m}), client)
+        _run_summarize_and_opus(job_id, all_parts, sources, intention, q, _log)
 
     import threading
     t = threading.Thread(target=_resume, daemon=True)
