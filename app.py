@@ -27,6 +27,11 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 app = Flask(__name__)
 jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, error}
 
+# Drafts directory — persists within a Railway session (survives browser refresh/disconnect)
+# Uses Railway volume if mounted, otherwise /tmp
+DRAFTS_DIR = Path(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "/tmp")) / "skillbuilder_drafts"
+DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ──────────────────────────────────────────────
 # Background build worker
@@ -335,6 +340,31 @@ def _run_summarize_and_opus(job_id, all_parts, sources, intention, q, log):
         q.put({"type": "complete", "skill_name": None})
 
 
+def _save_draft(job_id, partial_skills, intention, source_title, n_batches, batch_num):
+    """Write current partial skill state to disk so it survives browser disconnects."""
+    try:
+        draft_dir = DRAFTS_DIR / job_id
+        draft_dir.mkdir(parents=True, exist_ok=True)
+        # Merge what we have so far for preview
+        if partial_skills:
+            combined_md = "\n\n---\n\n".join(p.get("skill_md", "") for p in partial_skills)
+            skill_name = partial_skills[-1].get("skill_name", "Draft Skill")
+            draft = {
+                "job_id": job_id,
+                "skill_name": skill_name,
+                "skill_md": combined_md,
+                "summary": partial_skills[-1].get("summary", ""),
+                "intention": intention,
+                "source_title": source_title,
+                "batches_done": batch_num,
+                "batches_total": n_batches,
+                "is_partial": batch_num < n_batches,
+            }
+            (draft_dir / "partial.json").write_text(json.dumps(draft, ensure_ascii=False))
+    except Exception:
+        pass  # Draft saving is best-effort — never crash the build
+
+
 def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, client):
     """Phase 6: Opus builds skill from ranked summaries."""
     from generate_skill import SYSTEM_PROMPT, build_user_message, read_knowledge_base
@@ -393,6 +423,17 @@ def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, clien
 
             if result:
                 partial_skills.append(result)
+                # Save draft to disk after every completed batch
+                _save_draft(job_id, partial_skills, intention, source_title, n_batches, i)
+                # Also expose partial result in-memory for polling
+                jobs[job_id]["partial_skill"] = {
+                    "skill_name": result.get("skill_name", "Draft"),
+                    "skill_md": "\n\n---\n\n".join(p.get("skill_md","") for p in partial_skills),
+                    "batches_done": i,
+                    "batches_total": n_batches,
+                }
+                q.put({"type": "batch_done", "batch": i, "total": n_batches,
+                       "skill_name": result.get("skill_name", "Draft")})
                 log(f"Batch {i}/{n_batches} complete ✓", "success")
             else:
                 log(f"Batch {i}/{n_batches} failed after retry — skipping", "error")
@@ -517,6 +558,14 @@ def _finalize_skill(job_id, skill_result, q):
         "skill_dir": str(skill_dir),
         "skill_name": skill_name,
     })
+
+    # Remove draft file — build is complete
+    try:
+        draft_dir = DRAFTS_DIR / job_id
+        if draft_dir.exists():
+            shutil.rmtree(draft_dir)
+    except Exception:
+        pass
 
     q = jobs[job_id]["queue"]
     q.put({"type": "complete", "skill_name": skill_name})
@@ -774,6 +823,10 @@ def poll(job_id):
     """Polling fallback: returns buffered log messages since index N."""
     job = jobs.get(job_id)
     if not job:
+        # Check disk drafts — job may have been from a previous session
+        draft_file = DRAFTS_DIR / job_id / "partial.json"
+        if draft_file.exists():
+            return jsonify({"error": "Job not in memory", "has_draft": True, "job_id": job_id}), 404
         return jsonify({"error": "Job not found"}), 404
     since = int(request.args.get("since", 0))
     buf = job.get("log_buffer", [])
@@ -781,7 +834,53 @@ def poll(job_id):
         "messages": buf[since:],
         "total": len(buf),
         "status": job.get("status"),
+        "partial_skill": job.get("partial_skill"),  # included when Opus batches complete
     })
+
+
+@app.route("/drafts")
+def list_drafts():
+    """List all saved draft builds."""
+    drafts = []
+    for draft_dir in sorted(DRAFTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        partial = draft_dir / "partial.json"
+        if partial.exists():
+            try:
+                data = json.loads(partial.read_text())
+                drafts.append({
+                    "job_id": data.get("job_id", draft_dir.name),
+                    "skill_name": data.get("skill_name", "Untitled"),
+                    "intention": data.get("intention", ""),
+                    "batches_done": data.get("batches_done", 0),
+                    "batches_total": data.get("batches_total", 1),
+                    "is_partial": data.get("is_partial", False),
+                    "saved_at": int(partial.stat().st_mtime * 1000),
+                })
+            except Exception:
+                pass
+    return jsonify({"drafts": drafts})
+
+
+@app.route("/draft/<job_id>")
+def get_draft(job_id):
+    """Return the saved draft skill for a job."""
+    draft_file = DRAFTS_DIR / job_id / "partial.json"
+    if not draft_file.exists():
+        return jsonify({"error": "No draft found"}), 404
+    try:
+        data = json.loads(draft_file.read_text())
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/draft/<job_id>", methods=["DELETE"])
+def delete_draft(job_id):
+    """Delete a saved draft."""
+    draft_dir = DRAFTS_DIR / job_id
+    if draft_dir.exists():
+        shutil.rmtree(draft_dir)
+    return jsonify({"ok": True})
 
 
 @app.route("/result/<job_id>")

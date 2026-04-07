@@ -475,6 +475,35 @@
     border-radius:9px;padding:11px 15px;margin-bottom:14px;
     color:var(--error);font-size:13px;"></div>
 
+  <!-- Drafts / Resume Banner -->
+  <div id="drafts-banner" style="display:none;margin-bottom:14px;">
+    <div style="background:rgba(107,79,232,0.08);border:1px solid rgba(107,79,232,0.25);border-radius:12px;padding:14px 18px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:18px;">📋</span>
+          <div>
+            <p id="drafts-title" style="font-size:13.5px;font-weight:600;color:var(--text);">Build still running</p>
+            <p id="drafts-sub" style="font-size:12px;color:var(--text-2);margin-top:1px;"></p>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="drafts-resume-btn" class="btn-primary" style="font-size:12px;padding:7px 14px;" onclick="resumeLastJob()">Reconnect →</button>
+          <button class="btn-ghost" style="font-size:12px;padding:7px 12px;" onclick="showDraftsList()">View Drafts</button>
+          <button class="btn-ghost" style="font-size:12px;padding:7px 10px;color:var(--text-3);" onclick="hideDraftsBanner()">✕</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drafts List Panel -->
+  <div id="drafts-list-panel" class="card" style="display:none;padding:20px;margin-bottom:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h3 style="font-size:14px;font-weight:600;">Saved Drafts</h3>
+      <button class="btn-ghost" style="font-size:12px;padding:5px 10px;" onclick="document.getElementById('drafts-list-panel').style.display='none'">✕ Close</button>
+    </div>
+    <div id="drafts-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+  </div>
+
   <!-- Progress Card -->
   <div class="card" id="progress-card" style="padding:22px;margin-bottom:14px;display:none;">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;">
@@ -1209,6 +1238,7 @@ async function startBuild() {
     const data = await res.json();
     if (!res.ok) { showError(data.error || 'Build failed'); resetBuildUI(); return; }
     currentJobId = data.job_id;
+    localStorage.setItem('lastJobId', data.job_id);
     streamProgress(data.job_id);
   } catch(e) {
     showError('Request failed: ' + e.message);
@@ -1363,6 +1393,8 @@ function addLog(message, kind) {
 }
 
 async function loadResult(jobId) {
+  localStorage.removeItem('lastJobId');
+  hideDraftsBanner();
   const res  = await fetch('/result/' + jobId);
   const data = await res.json();
   if (data.status !== 'done') {
@@ -1495,6 +1527,157 @@ async function installSkill() {
   }
 }
 
+// ── Drafts & Resume ──────────────────────────────────────
+function hideDraftsBanner() {
+  document.getElementById('drafts-banner').style.display = 'none';
+}
+
+async function checkForResume() {
+  const lastJobId = localStorage.getItem('lastJobId');
+  if (!lastJobId) {
+    checkDraftsOnDisk();
+    return;
+  }
+  // Check if job is still alive on server
+  try {
+    const res = await fetch(`/poll/${lastJobId}?since=0`);
+    if (res.ok) {
+      const data = await res.json();
+      const banner = document.getElementById('drafts-banner');
+      if (data.status === 'done') {
+        // Job finished while we were away — load result
+        localStorage.removeItem('lastJobId');
+        document.getElementById('drafts-title').textContent = 'Build completed while you were away';
+        document.getElementById('drafts-sub').textContent = 'Click to view the result.';
+        document.getElementById('drafts-resume-btn').textContent = 'View Result';
+        document.getElementById('drafts-resume-btn').onclick = () => {
+          localStorage.removeItem('lastJobId');
+          hideDraftsBanner();
+          currentJobId = lastJobId;
+          loadResult(lastJobId);
+        };
+        banner.style.display = 'block';
+      } else if (data.status === 'running' || data.status === 'awaiting_confirmation') {
+        document.getElementById('drafts-title').textContent = 'Build still in progress';
+        document.getElementById('drafts-sub').textContent = `Job ${lastJobId} · ${data.total} log entries`;
+        document.getElementById('drafts-resume-btn').textContent = 'Reconnect →';
+        document.getElementById('drafts-resume-btn').onclick = resumeLastJob;
+        banner.style.display = 'block';
+      } else {
+        localStorage.removeItem('lastJobId');
+        checkDraftsOnDisk();
+      }
+    } else {
+      localStorage.removeItem('lastJobId');
+      checkDraftsOnDisk();
+    }
+  } catch(e) {
+    checkDraftsOnDisk();
+  }
+}
+
+async function checkDraftsOnDisk() {
+  try {
+    const res = await fetch('/drafts');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.drafts || !data.drafts.length) return;
+    const banner = document.getElementById('drafts-banner');
+    const count = data.drafts.length;
+    const newest = data.drafts[0];
+    document.getElementById('drafts-title').textContent =
+      `${count} saved draft${count > 1 ? 's' : ''} — "${newest.skill_name}"`;
+    document.getElementById('drafts-sub').textContent =
+      newest.is_partial
+        ? `Partial build: ${newest.batches_done}/${newest.batches_total} batches complete`
+        : 'Fully built, ready to load';
+    document.getElementById('drafts-resume-btn').textContent = 'Load Draft';
+    document.getElementById('drafts-resume-btn').onclick = () => loadDraft(newest.job_id);
+    banner.style.display = 'block';
+  } catch(e) {}
+}
+
+async function resumeLastJob() {
+  const lastJobId = localStorage.getItem('lastJobId');
+  if (!lastJobId) return;
+  hideDraftsBanner();
+  currentJobId = lastJobId;
+  document.getElementById('progress-card').style.display = 'block';
+  document.getElementById('progress-spinner').style.display = 'inline-block';
+  document.getElementById('progress-title').textContent = 'Reconnecting...';
+  document.getElementById('build-btn').disabled = true;
+  document.getElementById('stop-btn').style.display = 'inline-flex';
+  startTimer();
+  startPolling(lastJobId);
+}
+
+async function loadDraft(jobId) {
+  hideDraftsBanner();
+  document.getElementById('drafts-list-panel').style.display = 'none';
+  const res = await fetch(`/draft/${jobId}`);
+  if (!res.ok) { showError('Draft not found'); return; }
+  const data = await res.json();
+
+  // Show in output card like a completed build
+  currentJobId = jobId;
+  document.getElementById('progress-card').style.display = 'none';
+  document.getElementById('progress-title').textContent = data.is_partial
+    ? `Draft — ${data.batches_done}/${data.batches_total} batches`
+    : `Done — ${data.skill_name}`;
+  document.getElementById('output-title').textContent = data.skill_name + (data.is_partial ? ' (Draft)' : '');
+  document.getElementById('output-summary').textContent = data.summary || (data.is_partial ? `Partial build — ${data.batches_done} of ${data.batches_total} batches completed.` : '');
+  document.getElementById('preview-skill').textContent = data.skill_md || '';
+  document.getElementById('output-card').style.display = 'block';
+  document.getElementById('output-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function showDraftsList() {
+  const panel = document.getElementById('drafts-list-panel');
+  const list  = document.getElementById('drafts-list');
+  list.innerHTML = '<p style="color:var(--text-3);font-size:13px;">Loading...</p>';
+  panel.style.display = 'block';
+
+  const res = await fetch('/drafts');
+  const data = await res.json();
+  list.innerHTML = '';
+
+  if (!data.drafts || !data.drafts.length) {
+    list.innerHTML = '<p style="color:var(--text-3);font-size:13px;">No saved drafts found.</p>';
+    return;
+  }
+
+  data.drafts.forEach(d => {
+    const row = document.createElement('div');
+    row.style.cssText = 'background:var(--elevated);border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;';
+    const ago = Math.round((Date.now() - d.saved_at) / 60000);
+    const agoStr = ago < 60 ? `${ago}m ago` : `${Math.round(ago/60)}h ago`;
+    row.innerHTML = `
+      <div>
+        <p style="font-size:13px;font-weight:600;color:var(--text);">${d.skill_name}</p>
+        <p style="font-size:11.5px;color:var(--text-3);margin-top:2px;">
+          ${d.is_partial ? `${d.batches_done}/${d.batches_total} batches · ` : ''}${agoStr}
+          ${d.intention ? ' · ' + d.intention.slice(0, 60) + (d.intention.length > 60 ? '…' : '') : ''}
+        </p>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-primary" style="font-size:12px;padding:6px 12px;" onclick="loadDraft('${d.job_id}')">Load</button>
+        <button class="btn-ghost" style="font-size:12px;padding:6px 10px;color:var(--error);" onclick="deleteDraft('${d.job_id}', this)">✕</button>
+      </div>`;
+    list.appendChild(row);
+  });
+}
+
+async function deleteDraft(jobId, btn) {
+  btn.disabled = true;
+  await fetch(`/draft/${jobId}`, { method: 'DELETE' });
+  btn.closest('div[style]').remove();
+}
+
+// ── On page load: check for in-progress or saved drafts ──
+window.addEventListener('DOMContentLoaded', () => {
+  checkForResume();
+});
+
 // ── Cost estimate gate ───────────────────────────────────
 function showCostGate(msg, jobId) {
   document.getElementById('progress-spinner').style.display = 'none';
@@ -1504,7 +1687,7 @@ function showCostGate(msg, jobId) {
   const breakdown = document.getElementById('cost-breakdown');
   breakdown.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr auto;gap:4px 24px;color:var(--text-2);">
-      <span>Haiku summarization (already done)</span><span style="color:var(--text);font-family:var(--font-mono);">${fmt(msg.haiku_cost)}</span>
+      <span>Haiku summarization (${msg.sources} sources)</span><span style="color:var(--text);font-family:var(--font-mono);">${fmt(msg.haiku_cost)}</span>
       <span>Opus skill generation (${msg.batches} batch${msg.batches !== 1 ? 'es' : ''})</span><span style="color:var(--text);font-family:var(--font-mono);">${fmt(msg.opus_cost)}</span>
       <span style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px;font-weight:600;color:var(--text);">Total estimate</span>
       <span style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px;font-weight:700;font-family:var(--font-mono);color:var(--warn);">${fmt(msg.total_cost)}</span>
