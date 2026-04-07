@@ -450,6 +450,21 @@
         style="overflow:hidden;min-height:64px;"
         placeholder="e.g. I run a 7-figure Amazon brand. I want this skill to help me audit PPC campaigns — focus on TACoS, search term harvesting, and bid adjustments."></textarea>
     </div>
+    <!-- Inline progress — shown when build is running -->
+    <div id="inline-progress" style="display:none;margin-bottom:14px;">
+      <div style="height:1px;background:var(--border);margin-bottom:14px;"></div>
+      <!-- Current action (always pinned at top) -->
+      <div id="inline-current" style="display:flex;align-items:center;gap:10px;margin-bottom:10px;min-height:22px;">
+        <div class="spinner" id="inline-spinner" style="width:14px;height:14px;border-width:2px;"></div>
+        <span id="inline-current-text" style="font-size:13px;color:var(--text);font-weight:500;"></span>
+        <span id="inline-timer-badge" style="margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--text-3);white-space:nowrap;"></span>
+      </div>
+      <!-- Completed log entries (cascade downward, newest at bottom) -->
+      <div id="inline-log" style="display:flex;flex-direction:column;gap:3px;max-height:220px;overflow-y:auto;padding-right:4px;"></div>
+      <!-- Summarize / batch progress bars -->
+      <div id="inline-bars" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
+
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
       <div id="max-videos-wrap" style="display:flex;align-items:center;gap:10px;">
         <span class="field-label" style="margin:0;white-space:nowrap;">Max videos</span>
@@ -797,20 +812,24 @@ function startTimer() {
 
 function tickTimer() {
   const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+  let display;
   if (countdownSecs !== null) {
-    // Adjust countdown: original estimate minus elapsed
     const remaining = Math.max(0, countdownSecs - elapsed);
     const m = Math.floor(remaining / 60);
     const s = String(remaining % 60).padStart(2, '0');
-    document.getElementById('elapsed-timer').textContent = `${m}:${s}`;
+    display = `${m}:${s}`;
+    document.getElementById('elapsed-timer').textContent = display;
     document.getElementById('eta-label').textContent = 'remaining';
     document.getElementById('eta-label').style.display = 'block';
   } else {
-    // No estimate yet — show elapsed
     const m = Math.floor(elapsed / 60);
     const s = String(elapsed % 60).padStart(2, '0');
-    document.getElementById('elapsed-timer').textContent = `${m}:${s}`;
+    display = `${m}:${s}`;
+    document.getElementById('elapsed-timer').textContent = display;
   }
+  // Mirror to inline badge
+  const badge = document.getElementById('inline-timer-badge');
+  if (badge) badge.textContent = display;
 }
 
 function setTotal(count, estimatedSecs) {
@@ -847,16 +866,46 @@ function stopTimer() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
 }
 
+function ensureInlineBar(id, label) {
+  let bar = document.getElementById('ibar-' + id);
+  if (!bar) {
+    const wrap = document.getElementById('inline-bars');
+    bar = document.createElement('div');
+    bar.id = 'ibar-' + id;
+    bar.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
+    bar.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span id="ibar-${id}-label" style="font-size:11.5px;color:var(--text-3);">${label}</span>
+        <span id="ibar-${id}-pct" style="font-size:11.5px;font-weight:600;color:var(--brand-300);">0%</span>
+      </div>
+      <div style="height:3px;background:var(--elevated);border-radius:99px;overflow:hidden;">
+        <div id="ibar-${id}-fill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--brand-500),var(--brand-300));border-radius:99px;transition:width 0.3s ease;"></div>
+      </div>`;
+    wrap.appendChild(bar);
+  }
+  return bar;
+}
+
+function updateInlineBar(id, current, total, label) {
+  ensureInlineBar(id, label || id);
+  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+  document.getElementById(`ibar-${id}-fill`).style.width = pct + '%';
+  document.getElementById(`ibar-${id}-pct`).textContent = pct + '%';
+  if (label) document.getElementById(`ibar-${id}-label`).textContent = label;
+}
+
 function setSummarizeTotal(count) {
   document.getElementById('progress-bar-wrap').style.display = 'block';
   document.getElementById('progress-count').textContent = `Summarizing 0 / ${count} sources`;
   updateProgressBar(0, count);
-  document.getElementById('progress-title').textContent = 'Summarizing sources...';
+  document.getElementById('inline-current-text').textContent = `Summarizing sources with Haiku...`;
+  ensureInlineBar('summarize', `Summarizing 0 / ${count} sources`);
 }
 
 function setSummarizeProgress(current, total) {
   document.getElementById('progress-count').textContent = `Summarizing ${current} / ${total} sources`;
   updateProgressBar(current, total);
+  updateInlineBar('summarize', current, total, `Summarizing ${current} / ${total} sources`);
   // Recalculate ETA — ~3s per summary
   const elapsed = (Date.now() - timerStart) / 1000;
   if (current > 0) {
@@ -871,6 +920,8 @@ function setBatchTotal(count, estimatedSecs) {
   document.getElementById('progress-bar-wrap').style.display = 'block';
   document.getElementById('progress-count').textContent = `Batch 0 / ${count}`;
   updateProgressBar(0, count);
+  document.getElementById('inline-current-text').textContent = `Generating skill with Claude Opus...`;
+  ensureInlineBar('batch', `Batch 0 / ${count}`);
 }
 
 function setBatchProgress(current, total) {
@@ -882,6 +933,7 @@ function setBatchProgress(current, total) {
   }
   document.getElementById('progress-count').textContent = `Batch ${current} / ${total}`;
   updateProgressBar(current, total);
+  updateInlineBar('batch', current, total, `Batch ${current} / ${total}`);
 }
 
 function recordFetch() { /* kept for compatibility — progress now driven by SSE */ }
@@ -1210,11 +1262,13 @@ async function startBuild() {
   document.getElementById('output-card').style.display         = 'none';
   document.getElementById('persona-output-card').style.display = 'none';
   document.getElementById('cost-card').style.display           = 'none';
-  document.getElementById('progress-card').style.display       = 'block';
-  document.getElementById('log-container').innerHTML = '';
-  document.getElementById('progress-spinner').style.display = 'inline-block';
-  document.getElementById('progress-title').textContent =
-    currentMode === 'persona' ? 'Building persona...' : 'Building skill...';
+  document.getElementById('progress-card').style.display       = 'none';
+  document.getElementById('log-container').innerHTML           = '';
+  document.getElementById('inline-log').innerHTML              = '';
+  document.getElementById('inline-bars').innerHTML             = '';
+  document.getElementById('inline-current-text').textContent   = currentMode === 'persona' ? 'Building persona...' : 'Fetching sources...';
+  document.getElementById('inline-progress').style.display     = 'block';
+  document.getElementById('inline-spinner').style.display      = 'inline-block';
   document.getElementById('build-btn').disabled = true;
   document.getElementById('stop-btn').style.display = 'inline-flex';
   startTimer();
@@ -1264,6 +1318,7 @@ function resetBuildUI() {
   document.getElementById('stop-btn').style.display = 'none';
   document.getElementById('eta-label').style.display = 'none';
   document.getElementById('progress-bar-wrap').style.display = 'none';
+  document.getElementById('inline-spinner').style.display = 'none';
 }
 
 function handleMsg(msg, jobId, stopFn) {
@@ -1379,6 +1434,7 @@ function streamProgress(jobId) {
 }
 
 function addLog(message, kind) {
+  // ── Old full-page log (kept for detail/debugging) ──
   const container = document.getElementById('log-container');
   const row = document.createElement('div');
   row.className = 'log-row';
@@ -1388,6 +1444,28 @@ function addLog(message, kind) {
   row.innerHTML = `<div class="log-dot ${dotClass}"></div><span style="font-size:13px;color:${color};">${message}</span>`;
   container.appendChild(row);
   container.scrollTop = container.scrollHeight;
+
+  // ── Inline progress section ──
+  const current = document.getElementById('inline-current-text');
+  const inlineLog = document.getElementById('inline-log');
+  if (current && inlineLog) {
+    // Move previous "current" into the cascading log as a completed item
+    const prev = current.textContent;
+    if (prev && prev !== message) {
+      const done = document.createElement('div');
+      done.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:2px 0;';
+      const checkColor = kind === 'error' ? 'var(--error)' : 'var(--success)';
+      done.innerHTML = `<span style="color:${checkColor};font-size:11px;margin-top:1px;flex-shrink:0;">✓</span><span style="font-size:12px;color:var(--text-2);line-height:1.5;">${prev}</span>`;
+      inlineLog.appendChild(done);
+      inlineLog.scrollTop = inlineLog.scrollHeight;
+    }
+    // Set new current action
+    current.textContent = message;
+    current.style.color = kind === 'error' ? 'var(--error)' : 'var(--text)';
+    document.getElementById('inline-spinner').style.display =
+      (kind === 'error' || kind === 'success') ? 'none' : 'inline-block';
+  }
+
   // Update ETA after each successful fetch
   if (kind === 'success' && /^Got:/.test(message)) recordFetch();
 }
@@ -1403,6 +1481,9 @@ async function loadResult(jobId) {
     return;
   }
   document.getElementById('progress-spinner').style.display = 'none';
+  document.getElementById('inline-spinner').style.display = 'none';
+  document.getElementById('inline-current-text').textContent = '✓ Done';
+  document.getElementById('inline-current-text').style.color = 'var(--success)';
   document.getElementById('build-btn').disabled = false;
 
   if (data.job_type === 'persona') {
