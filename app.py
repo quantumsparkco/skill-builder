@@ -27,15 +27,21 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 app = Flask(__name__)
 jobs = {}  # job_id -> {status, queue, result, zip_path, skill_dir, skill_name, error}
 
-# Force HTTPS in production (Railway sets RAILWAY_ENVIRONMENT)
-# Railway terminates SSL at the proxy, so check X-Forwarded-Proto header
+# Force HTTPS — Railway terminates SSL at the proxy and sets X-Forwarded-Proto.
+# We redirect if that header says "http". Locally this header is absent so
+# nothing happens. HSTS header tells browsers to always use HTTPS going forward.
 @app.before_request
 def redirect_to_https():
-    if os.getenv("RAILWAY_ENVIRONMENT"):
-        proto = request.headers.get("X-Forwarded-Proto", "http")
-        if proto == "http":
-            url = request.url.replace("http://", "https://", 1)
-            return redirect(url, code=301)
+    proto = request.headers.get("X-Forwarded-Proto", "")
+    if proto == "http":
+        url = request.url.replace("http://", "https://", 1)
+        return redirect(url, code=301)
+
+@app.after_request
+def add_hsts(response):
+    if request.headers.get("X-Forwarded-Proto") == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 # Drafts directory — persists within a Railway session (survives browser refresh/disconnect)
 # Uses Railway volume if mounted, otherwise /tmp
