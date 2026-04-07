@@ -162,12 +162,15 @@ def get_transcript_text(video_id, verbose=False):
     Fall back to yt-dlp auto-subtitle extraction.
     Returns (text, method) or (None, reason).
     """
-    # Method 1: youtube-transcript-api — try any available transcript
+    # Method 1: youtube-transcript-api
+    # Supports both old API (class methods) and new API (instance methods, v0.7+)
     if TRANSCRIPT_API:
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            # New API (v0.7+): instantiate first
+            ytt = YouTubeTranscriptApi()
+            transcript_list = ytt.list(video_id)
 
-            # Priority: manually created English > auto-generated English > any manual > any auto
+            # Priority: manual English > auto English > any available
             transcript = None
             for lang in ["en", "en-US", "en-GB"]:
                 try:
@@ -183,14 +186,12 @@ def get_transcript_text(video_id, verbose=False):
                     except Exception:
                         pass
             if transcript is None:
-                # Take whatever is first available (may need translation)
                 for t in transcript_list:
                     transcript = t
                     break
 
             if transcript is not None:
                 entries = transcript.fetch()
-                # Handle both dict-style (older API) and attribute-style (newer API) entries
                 def _text(e):
                     return e["text"] if isinstance(e, dict) else e.text
                 text = " ".join(_text(e) for e in entries)
