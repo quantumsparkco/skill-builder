@@ -1327,6 +1327,7 @@ function handleMsg(msg, jobId, stopFn) {
   if (msg.type === 'progress')         { setProgress(msg.current, msg.total); return; }
   if (msg.type === 'batch_total')      { setBatchTotal(msg.count, msg.estimated_secs); return; }
   if (msg.type === 'batch_progress')   { setBatchProgress(msg.current, msg.total); return; }
+  if (msg.type === 'batch_done')       { updateInlineBar('batch', msg.batch, msg.total, `Batch ${msg.batch} / ${msg.total} saved ✓`); return; }
   if (msg.type === 'summarize_total')  { setSummarizeTotal(msg.count); return; }
   if (msg.type === 'summarize_progress') { setSummarizeProgress(msg.current, msg.total); return; }
   if (msg.type === 'cost_estimate') {
@@ -1356,10 +1357,9 @@ function handleMsg(msg, jobId, stopFn) {
   addLog(msg.message, msg.type);
 }
 
-function startPolling(jobId) {
-  let since = 0;
+function startPolling(jobId, startFrom = 0) {
+  let since = startFrom;
   let done = false;
-  addLog('Switched to polling mode — build is still running...', 'info');
 
   async function poll() {
     if (done) return;
@@ -1372,18 +1372,17 @@ function startPolling(jobId) {
         if (done) return;
       }
       since = data.total;
-      if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
-        if (!done) {
-          done = true;
-          loadResult(jobId);
-        }
+      if (data.status === 'done') {
+        if (!done) { done = true; loadResult(jobId); }
         return;
       }
-      // Check for awaiting_confirmation or needs_input via status
-      if (data.status === 'awaiting_confirmation') {
-        // The cost_estimate message is already in the buffer — it was handled above
+      if (data.status === 'error' || data.status === 'cancelled') {
+        resetBuildUI();
         return;
       }
+      // awaiting_confirmation: cost_estimate is in the buffer and will have
+      // been processed by handleMsg above — polling stops until user acts
+      if (data.status === 'awaiting_confirmation') return;
     } catch(e) { /* network glitch, retry */ }
     setTimeout(poll, 3000);
   }
@@ -1420,8 +1419,8 @@ function streamProgress(jobId) {
       if (intentionallyClosed) return;
       reconnectAttempts++;
       if (reconnectAttempts > MAX_SSE_ATTEMPTS) {
-        // SSE unreliable on this connection — fall back to polling
-        startPolling(jobId);
+        // SSE unreliable — fall back to polling (no noisy message, just switches silently)
+        startPolling(jobId, 0);
         return;
       }
       const delay = Math.min(1000 * reconnectAttempts, 5000);
@@ -1687,13 +1686,16 @@ async function resumeLastJob() {
   if (!lastJobId) return;
   hideDraftsBanner();
   currentJobId = lastJobId;
-  document.getElementById('progress-card').style.display = 'block';
-  document.getElementById('progress-spinner').style.display = 'inline-block';
-  document.getElementById('progress-title').textContent = 'Reconnecting...';
+  document.getElementById('inline-log').innerHTML = '';
+  document.getElementById('inline-bars').innerHTML = '';
+  document.getElementById('inline-current-text').textContent = 'Reconnecting...';
+  document.getElementById('inline-current-text').style.color = 'var(--text-2)';
+  document.getElementById('inline-progress').style.display = 'block';
+  document.getElementById('inline-spinner').style.display = 'inline-block';
   document.getElementById('build-btn').disabled = true;
   document.getElementById('stop-btn').style.display = 'inline-flex';
   startTimer();
-  startPolling(lastJobId);
+  startPolling(lastJobId, 0); // replay from start so cost gate / result can show if needed
 }
 
 async function loadDraft(jobId) {
@@ -1792,6 +1794,14 @@ async function confirmBuild() {
   btn.disabled = true;
   btn.textContent = 'Starting…';
 
+  // Find out how many messages are already buffered so we don't replay them
+  // (replaying cost_estimate would re-show the cost gate)
+  let startFrom = 0;
+  try {
+    const pollRes = await fetch(`/poll/${jobId}?since=0`);
+    if (pollRes.ok) { const pd = await pollRes.json(); startFrom = pd.total || 0; }
+  } catch(e) {}
+
   const res = await fetch('/confirm/' + jobId, { method: 'POST' });
   if (!res.ok) {
     btn.disabled = false;
@@ -1800,11 +1810,12 @@ async function confirmBuild() {
     return;
   }
   card.style.display = 'none';
-  document.getElementById('progress-spinner').style.display = 'inline-block';
-  document.getElementById('progress-title').textContent = 'Building skill...';
+  document.getElementById('inline-spinner').style.display = 'inline-block';
+  document.getElementById('inline-current-text').textContent = 'Summarizing sources with Haiku...';
+  document.getElementById('inline-current-text').style.color = 'var(--text)';
   document.getElementById('build-btn').disabled = true;
   document.getElementById('stop-btn').style.display = 'inline-flex';
-  streamProgress(jobId);
+  startPolling(jobId, startFrom);
 }
 
 function cancelCostGate() {

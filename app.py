@@ -33,6 +33,28 @@ DRAFTS_DIR = Path(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "/tmp")) / "skillbuilde
 DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+class _BufQueue:
+    """
+    Queue wrapper that writes every message to log_buffer immediately on put().
+
+    This is the key fix: previously log_buffer was only populated by the SSE
+    generator (i.e. only when SSE was connected). If SSE dropped mid-build,
+    log_buffer stayed empty and the polling fallback had nothing to replay.
+    Now every put() from background threads goes directly to log_buffer,
+    so polling always has the full history regardless of SSE state.
+    """
+    def __init__(self, buf: list):
+        self._q = queue.Queue()
+        self._buf = buf
+
+    def put(self, msg):
+        self._buf.append(msg)  # immediate — no SSE needed
+        self._q.put(msg)
+
+    def get(self, **kw):
+        return self._q.get(**kw)
+
+
 # ──────────────────────────────────────────────
 # Background build worker
 # ──────────────────────────────────────────────
@@ -433,7 +455,8 @@ def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, clien
                     "batches_total": n_batches,
                 }
                 q.put({"type": "batch_done", "batch": i, "total": n_batches,
-                       "skill_name": result.get("skill_name", "Draft")})
+                       "skill_name": result.get("skill_name", "Draft"),
+                       "message": f"Batch {i}/{n_batches} saved ✓"})
                 log(f"Batch {i}/{n_batches} complete ✓", "success")
             else:
                 log(f"Batch {i}/{n_batches} failed after retry — skipping", "error")
@@ -731,10 +754,11 @@ def build():
         return jsonify({"error": "Add at least one URL, file, or paste some text."}), 400
 
     job_id = str(uuid.uuid4())[:8]
+    _buf = []
     jobs[job_id] = {
         "status": "running",
-        "queue": queue.Queue(),
-        "log_buffer": [],
+        "queue": _BufQueue(_buf),
+        "log_buffer": _buf,
         "result": None, "zip_path": None,
         "skill_dir": None, "skill_name": None, "error": None,
         "cancelled": False,
@@ -774,10 +798,11 @@ def build_persona_route():
         return jsonify({"error": "Add at least one URL, file, or paste some text."}), 400
 
     job_id = str(uuid.uuid4())[:8]
+    _buf = []
     jobs[job_id] = {
         "status": "running",
-        "queue": queue.Queue(),
-        "log_buffer": [],
+        "queue": _BufQueue(_buf),
+        "log_buffer": _buf,
         "result": None, "zip_path": None,
         "skill_dir": None, "skill_name": None, "error": None,
         "job_type": "persona",
@@ -800,11 +825,10 @@ def stream(job_id):
 
     def generate():
         q = jobs[job_id]["queue"]
-        buf = jobs[job_id]["log_buffer"]
         while True:
             try:
                 msg = q.get(timeout=15)
-                buf.append(msg)
+                # log_buffer already populated by _BufQueue.put() in background thread
                 yield f"data: {json.dumps(msg)}\n\n"
                 if msg.get("type") == "complete":
                     break
