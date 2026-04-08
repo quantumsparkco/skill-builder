@@ -319,30 +319,29 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
             "estimated_secs": est_secs,
         })
 
-        if total_cost > 1.00:
-            jobs[job_id]["status"] = "awaiting_confirmation"
-            jobs[job_id]["pending_parts"] = all_parts
-            jobs[job_id]["pending_source_url"] = sources[0] if sources else ""
-            # Persist pending state to disk so a dyno restart doesn't lose it
-            try:
-                pending_dir = DRAFTS_DIR / job_id
-                pending_dir.mkdir(parents=True, exist_ok=True)
-                pending_data = {
-                    "job_id": job_id,
-                    "sources": sources,
-                    "intention": intention,
-                    "all_parts": all_parts,
-                    "log_buffer": [],  # fresh — will replay from buffer on resume
-                }
-                (pending_dir / "pending.json").write_text(
-                    json.dumps(pending_data, ensure_ascii=False)
-                )
-            except Exception:
-                pass  # best-effort
-            return  # Frontend must POST /confirm/<job_id> to continue
-
-        # Under $1 — proceed automatically
-        narrate(f"Cost is under $1 — proceeding automatically to summarization.")
+        # Always show cost estimate then auto-proceed after a short delay.
+        # We never pause for user confirmation — that pattern requires job state
+        # to survive an unpredictable window and causes "job expired" errors.
+        import time
+        q.put({
+            "type": "cost_estimate",
+            "sources": len(all_parts),
+            "total_sources": total_fetched,
+            "batches": est_batches,
+            "haiku_cost": round(haiku_cost, 4),
+            "opus_cost": round(opus_cost, 4),
+            "total_cost": round(total_cost, 4),
+            "estimated_secs": est_secs,
+            "auto_proceed": True,  # tell frontend to show countdown, not confirm button
+        })
+        # Give the user 8 seconds to cancel before proceeding
+        for _ in range(8):
+            if jobs[job_id].get("cancelled"):
+                return
+            time.sleep(1)
+        if jobs[job_id].get("cancelled"):
+            return
+        narrate(f"Proceeding with build — {len(all_parts)} sources, estimated ${round(total_cost, 2)}.")
         _run_summarize_and_opus(job_id, all_parts, sources, intention, q, log)
 
     except Exception as e:

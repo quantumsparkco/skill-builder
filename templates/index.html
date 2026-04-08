@@ -599,7 +599,7 @@
     </div>
     <div id="cost-breakdown" style="background:var(--elevated);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:18px;font-size:13px;line-height:2;"></div>
     <div style="display:flex;gap:10px;">
-      <button class="btn-primary" id="cost-proceed-btn" onclick="confirmBuild()">Proceed →</button>
+      <button class="btn-primary" id="cost-proceed-btn" disabled>Proceeding in 8s…</button>
       <button class="btn-ghost" onclick="cancelCostGate()" style="color:var(--error);border-color:rgba(255,107,129,0.3);">Cancel</button>
     </div>
   </div>
@@ -1453,9 +1453,7 @@ function handleMsg(msg, jobId, stopFn) {
   if (msg.type === 'summarize_total')  { summarizePhaseStarted = true; setSummarizeTotal(msg.count); return; }
   if (msg.type === 'summarize_progress') { setSummarizeProgress(msg.current, msg.total); return; }
   if (msg.type === 'cost_estimate') {
-    stopFn();
-    showCostGate(msg, jobId);
-    resetBuildUI();
+    showCostGate(msg, jobId);  // show info + countdown — build continues automatically
     return;
   }
   if (msg.type === 'needs_input') {
@@ -1905,9 +1903,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // ── Cost estimate gate ───────────────────────────────────
 function showCostGate(msg, jobId) {
-  document.getElementById('progress-spinner').style.display = 'none';
-  document.getElementById('progress-title').textContent = 'Cost approval needed';
-
+  // Cost is informational — build is already running in background with 8s cancel window
   const fmt = v => '$' + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
   const breakdown = document.getElementById('cost-breakdown');
   breakdown.innerHTML = `
@@ -1923,43 +1919,23 @@ function showCostGate(msg, jobId) {
   card.dataset.jobId = jobId;
   card.style.display = 'block';
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
 
-async function confirmBuild() {
-  const card = document.getElementById('cost-card');
-  const jobId = card.dataset.jobId;
+  // Replace Proceed button with countdown — build auto-continues in 8s
   const btn = document.getElementById('cost-proceed-btn');
   btn.disabled = true;
-  btn.textContent = 'Starting…';
-
-  // Find out how many messages are already buffered so we don't replay them
-  // (replaying cost_estimate would re-show the cost gate)
-  let startFrom = 0;
-  try {
-    const pollRes = await fetch(`/poll/${jobId}?since=0`);
-    if (pollRes.ok) { const pd = await pollRes.json(); startFrom = pd.total || 0; }
-  } catch(e) {}
-
-  const res = await fetch('/confirm/' + jobId, { method: 'POST' });
-  if (!res.ok) {
-    btn.disabled = false;
-    btn.textContent = 'Proceed →';
-    showError('Could not resume build. The job may have expired.');
-    return;
-  }
-  card.style.display = 'none';
-  document.getElementById('inline-log').innerHTML = '';
-  document.getElementById('inline-bars').innerHTML = '';
-  document.getElementById('inline-progress').style.display = 'block';
-  document.getElementById('inline-spinner').style.display = 'inline-block';
-  document.getElementById('inline-current-text').textContent = 'Summarizing sources with Haiku...';
-  document.getElementById('inline-current-text').style.color = 'var(--text)';
-  document.getElementById('build-btn').disabled = true;
-  document.getElementById('stop-btn').style.display = 'inline-flex';
-  resetOverallBar();
-  setOverallPhase('summarize', 0, 0);
-  startTimer();
-  startPolling(jobId, startFrom);
+  let secs = 8;
+  btn.textContent = `Proceeding in ${secs}s…`;
+  const tick = setInterval(() => {
+    secs--;
+    if (secs <= 0) {
+      clearInterval(tick);
+      card.style.display = 'none';
+      btn.textContent = 'Proceed →';
+      btn.disabled = false;
+    } else {
+      btn.textContent = `Proceeding in ${secs}s…`;
+    }
+  }, 1000);
 }
 
 function cancelCostGate() {
@@ -1967,9 +1943,8 @@ function cancelCostGate() {
   const jobId = card.dataset.jobId;
   if (jobId) fetch('/cancel/' + jobId, { method: 'POST' });
   card.style.display = 'none';
-  document.getElementById('progress-spinner').style.display = 'none';
-  document.getElementById('progress-title').textContent = 'Cancelled';
-  addLog('Build cancelled at cost gate.', 'info');
+  addLog('Build cancelled.', 'info');
+  resetBuildUI();
 }
 
 // ── Contradiction questions ──────────────────────────────
