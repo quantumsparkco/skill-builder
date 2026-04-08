@@ -214,9 +214,8 @@ def get_transcript_text(video_id, verbose=False):
                     if text:
                         return text, "transcript-api"
                 except concurrent.futures.TimeoutError:
-                    _ip_blocked = True  # hung = likely throttled, skip API for rest
-                    if verbose:
-                        print(f"    transcript-api timed out — switching to yt-dlp", flush=True)
+                    # Single timeout — just skip this video, don't block the whole session
+                    return None, "timeout"
 
         except (IpBlocked, RequestBlocked):
             _ip_blocked = True
@@ -234,8 +233,9 @@ def get_transcript_text(video_id, verbose=False):
             if verbose:
                 print(f"    transcript-api error: {type(e).__name__}: {e}", flush=True)
 
-    # Method 2: yt-dlp subtitle extraction (30s timeout)
-    if YTDLP:
+    # Method 2: yt-dlp subtitle extraction — only when IP is known blocked
+    # (not for every missing transcript — that would add 30s per video)
+    if YTDLP and _ip_blocked:
         import tempfile, concurrent.futures
         def _fetch_via_ytdlp():
             with tempfile.TemporaryDirectory() as tmpdir:
