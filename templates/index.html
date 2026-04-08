@@ -454,15 +454,39 @@
     <!-- Inline progress — shown when build is running -->
     <div id="inline-progress" style="display:none;margin-bottom:14px;">
       <div style="height:1px;background:var(--border);margin-bottom:14px;"></div>
-      <!-- Current action (always pinned at top) -->
+
+      <!-- Overall progress bar -->
+      <div id="overall-bar-wrap" style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="overall-phase-label" style="font-size:12px;font-weight:600;color:var(--text-2);">Fetching</span>
+            <span id="overall-phase-steps" style="font-size:11px;color:var(--text-3);"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="overall-eta" style="font-size:11px;color:var(--text-3);"></span>
+            <span id="inline-timer-badge" style="font-family:var(--font-mono);font-size:12px;color:var(--text-3);white-space:nowrap;"></span>
+          </div>
+        </div>
+        <!-- Phase track -->
+        <div style="display:flex;gap:3px;margin-bottom:6px;">
+          <div id="phase-fetch"    style="flex:2;height:3px;border-radius:99px;background:var(--brand-500);transition:all 0.4s;"></div>
+          <div id="phase-summarize" style="flex:2;height:3px;border-radius:99px;background:var(--elevated);transition:all 0.4s;"></div>
+          <div id="phase-generate" style="flex:1;height:3px;border-radius:99px;background:var(--elevated);transition:all 0.4s;"></div>
+        </div>
+        <!-- Fine-grained bar within current phase -->
+        <div style="height:4px;background:var(--elevated);border-radius:99px;overflow:hidden;">
+          <div id="overall-bar-fill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--brand-500),var(--brand-300));border-radius:99px;transition:width 0.5s ease;"></div>
+        </div>
+      </div>
+
+      <!-- Current action -->
       <div id="inline-current" style="display:flex;align-items:center;gap:10px;margin-bottom:10px;min-height:22px;">
         <div class="spinner" id="inline-spinner" style="width:14px;height:14px;border-width:2px;"></div>
         <span id="inline-current-text" style="font-size:13px;color:var(--text);font-weight:500;"></span>
-        <span id="inline-timer-badge" style="margin-left:auto;font-family:var(--font-mono);font-size:12px;color:var(--text-3);white-space:nowrap;"></span>
       </div>
-      <!-- Completed log entries (cascade downward, newest at bottom) -->
-      <div id="inline-log" style="display:flex;flex-direction:column;gap:3px;max-height:220px;overflow-y:auto;padding-right:4px;"></div>
-      <!-- Summarize / batch progress bars -->
+      <!-- Completed log entries -->
+      <div id="inline-log" style="display:flex;flex-direction:column;gap:3px;max-height:160px;overflow-y:auto;padding-right:4px;"></div>
+      <!-- Phase-level progress bars -->
       <div id="inline-bars" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;"></div>
     </div>
 
@@ -840,6 +864,7 @@ function setTotal(count, estimatedSecs) {
   document.getElementById('progress-bar-wrap').style.display = 'block';
   document.getElementById('progress-count').textContent = `0 / ${count} videos`;
   updateProgressBar(0, count);
+  setOverallPhase('fetch', 0, count);
 }
 
 function setProgress(current, total) {
@@ -856,6 +881,7 @@ function setProgress(current, total) {
 
   document.getElementById('progress-count').textContent = `${current} / ${total} videos`;
   updateProgressBar(current, total);
+  setOverallPhase('fetch', current, total);
 }
 
 function updateProgressBar(current, total) {
@@ -902,6 +928,7 @@ function setSummarizeTotal(count) {
   updateProgressBar(0, count);
   document.getElementById('inline-current-text').textContent = `Summarizing sources with Haiku...`;
   ensureInlineBar('summarize', `Summarizing 0 / ${count} sources`);
+  setOverallPhase('summarize', 0, count);
 }
 
 function setSummarizeProgress(current, total) {
@@ -914,6 +941,7 @@ function setSummarizeProgress(current, total) {
     const secsEach = elapsed / current;
     countdownSecs = Math.round(elapsed + (total - current) * secsEach + 60);
   }
+  setOverallPhase('summarize', current, total);
 }
 
 function setBatchTotal(count, estimatedSecs) {
@@ -924,6 +952,7 @@ function setBatchTotal(count, estimatedSecs) {
   updateProgressBar(0, count);
   document.getElementById('inline-current-text').textContent = `Generating skill with Claude Opus...`;
   ensureInlineBar('batch', `Batch 0 / ${count}`);
+  setOverallPhase('generate', 0, count);
 }
 
 function setBatchProgress(current, total) {
@@ -936,9 +965,73 @@ function setBatchProgress(current, total) {
   document.getElementById('progress-count').textContent = `Batch ${current} / ${total}`;
   updateProgressBar(current, total);
   updateInlineBar('batch', current, total, `Batch ${current} / ${total}`);
+  setOverallPhase('generate', current, total);
 }
 
 function recordFetch() { /* kept for compatibility — progress now driven by SSE */ }
+
+// ── Overall progress bar ────────────────────────────────────
+const PHASE_ORDER = ['fetch', 'summarize', 'generate'];
+const PHASE_LABELS = { fetch: 'Fetching', summarize: 'Summarizing', generate: 'Generating' };
+let _overallPhase = 'fetch';
+
+function resetOverallBar() {
+  _overallPhase = 'fetch';
+  PHASE_ORDER.forEach(p => {
+    const el = document.getElementById('phase-' + p);
+    if (el) el.style.background = 'var(--elevated)';
+  });
+  const fetch_el = document.getElementById('phase-fetch');
+  if (fetch_el) fetch_el.style.background = 'var(--brand-500)';
+  const fill = document.getElementById('overall-bar-fill');
+  if (fill) fill.style.width = '0%';
+  const lbl = document.getElementById('overall-phase-label');
+  if (lbl) lbl.textContent = 'Fetching';
+  const steps = document.getElementById('overall-phase-steps');
+  if (steps) steps.textContent = '';
+  const eta = document.getElementById('overall-eta');
+  if (eta) eta.textContent = '';
+}
+
+function setOverallPhase(phase, current, total) {
+  _overallPhase = phase;
+  // Color segments: done = brand-500 faded, active = brand-500, pending = elevated
+  PHASE_ORDER.forEach(p => {
+    const el = document.getElementById('phase-' + p);
+    if (!el) return;
+    const idx = PHASE_ORDER.indexOf(p);
+    const activeIdx = PHASE_ORDER.indexOf(phase);
+    if (idx < activeIdx)      el.style.background = 'var(--brand-300)';   // done
+    else if (idx === activeIdx) el.style.background = 'var(--brand-500)'; // active
+    else                        el.style.background = 'var(--elevated)';  // pending
+  });
+
+  // Fine-grained fill bar
+  const pct = (total > 0) ? Math.min(100, Math.round((current / total) * 100)) : 0;
+  const fill = document.getElementById('overall-bar-fill');
+  if (fill) fill.style.width = pct + '%';
+
+  // Phase label & step count
+  const lbl = document.getElementById('overall-phase-label');
+  if (lbl) lbl.textContent = PHASE_LABELS[phase] || phase;
+  const steps = document.getElementById('overall-phase-steps');
+  if (steps && total > 0) steps.textContent = `${current} / ${total}`;
+  else if (steps) steps.textContent = '';
+
+  // ETA: re-use countdownSecs which is already calculated per phase
+  const eta = document.getElementById('overall-eta');
+  if (eta && countdownSecs > 0) {
+    const remaining = Math.max(0, countdownSecs - Math.round((Date.now() - timerStart) / 1000));
+    if (remaining > 0) {
+      const m = Math.floor(remaining / 60), s = remaining % 60;
+      eta.textContent = m > 0 ? `~${m}m ${s}s left` : `~${s}s left`;
+    } else {
+      eta.textContent = '';
+    }
+  } else if (eta) {
+    eta.textContent = '';
+  }
+}
 
 // ── Mode switching ─────────────────────────────────────────
 function switchMode(mode) {
@@ -1270,6 +1363,7 @@ async function startBuild() {
   document.getElementById('inline-log').innerHTML              = '';
   document.getElementById('inline-bars').innerHTML             = '';
   document.getElementById('inline-current-text').textContent   = currentMode === 'persona' ? 'Building persona...' : 'Fetching sources...';
+  resetOverallBar();
   document.getElementById('inline-progress').style.display     = 'block';
   document.getElementById('inline-spinner').style.display      = 'inline-block';
   document.getElementById('build-btn').disabled = true;
@@ -1349,6 +1443,7 @@ function handleMsg(msg, jobId, stopFn) {
   if (msg.type === 'complete') {
     stopFn();
     if (totalVideos > 0) updateProgressBar(totalVideos, totalVideos);
+    setOverallPhase('generate', 1, 1); // 100% fill on complete
     setTimeout(() => {
       resetBuildUI();
       msg.skill_name ? loadResult(jobId) : (() => {
@@ -1699,6 +1794,7 @@ async function resumeLastJob() {
   document.getElementById('inline-spinner').style.display = 'inline-block';
   document.getElementById('build-btn').disabled = true;
   document.getElementById('stop-btn').style.display = 'inline-flex';
+  resetOverallBar();
   startTimer();
   startPolling(lastJobId, 0); // replay from start so cost gate / result can show if needed
 }
@@ -1823,6 +1919,8 @@ async function confirmBuild() {
   document.getElementById('inline-current-text').style.color = 'var(--text)';
   document.getElementById('build-btn').disabled = true;
   document.getElementById('stop-btn').style.display = 'inline-flex';
+  resetOverallBar();
+  setOverallPhase('summarize', 0, 0);
   startTimer();
   startPolling(jobId, startFrom);
 }
