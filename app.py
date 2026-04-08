@@ -203,6 +203,9 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
     def log(msg, kind="info"):
         q.put({"type": kind, "message": msg})
 
+    def narrate(msg):
+        q.put({"type": "narrate", "message": msg})
+
     try:
         from fetch_content import fetch
         from generate_skill import SYSTEM_PROMPT, build_user_message, read_knowledge_base, save_skill
@@ -212,6 +215,9 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         source_intentions = jobs[job_id].get("source_intentions", {})
 
         all_parts = []
+
+        n_sources = len(sources) + (1 if raw_text else 0)
+        narrate(f"Starting fetch across {n_sources} source{'s' if n_sources != 1 else ''}. I'll pull all the content first — this is free, no API calls yet.")
 
         # ── Phase 1: Fetch all content ────────────────────────────────────────
         for url in sources:
@@ -270,6 +276,9 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
         if jobs[job_id].get("cancelled"):
             return
 
+        total_chars = sum(len(p["content"]) for p in all_parts)
+        narrate(f"Fetched {len(all_parts)} pieces of content ({total_chars:,} chars total). Now scoring by relevance to your intention before deciding what to summarize.")
+
         # ── Phase 2: Pre-rank by title relevance, cap at MAX_PRE_SUMMARIZE ───
         total_fetched = len(all_parts)
         if len(all_parts) > MAX_PRE_SUMMARIZE:
@@ -279,6 +288,7 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
             all_parts.sort(key=lambda p: -p["title_score"])
             all_parts = all_parts[:MAX_PRE_SUMMARIZE]
             log(f"Large source set: kept top {MAX_PRE_SUMMARIZE} of {total_fetched} sources by title relevance", "info")
+            narrate(f"Large source set — trimmed to the top {MAX_PRE_SUMMARIZE} most relevant pieces (out of {total_fetched}) based on title keyword matching. This keeps API costs predictable.")
 
         # ── Phase 3: Cost estimate gate (BEFORE spending on Haiku) ───────────
         total_raw = sum(min(len(p["content"]), SUMMARY_MAX_INPUT) for p in all_parts)
@@ -316,6 +326,7 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
             return  # Frontend must POST /confirm/<job_id> to continue
 
         # Under $1 — proceed automatically
+        narrate(f"Cost is under $1 — proceeding automatically to summarization.")
         _run_summarize_and_opus(job_id, all_parts, sources, intention, q, log)
 
     except Exception as e:
@@ -330,8 +341,12 @@ def _run_summarize_and_opus(job_id, all_parts, sources, intention, q, log):
     import anthropic
     client = anthropic.Anthropic()
 
+    def narrate(msg):
+        q.put({"type": "narrate", "message": msg})
+
     try:
         # ── Phase 4: Haiku summarizes the capped set ──────────────────────────
+        narrate(f"Now running {len(all_parts)} sources through Claude Haiku. This is a fast, cheap distillation pass — Haiku extracts the signal from each piece so Opus only has to deal with the good stuff.")
         log(f"Summarizing {len(all_parts)} sources with Haiku...")
         q.put({"type": "summarize_total", "count": len(all_parts)})
 
@@ -365,6 +380,7 @@ def _run_summarize_and_opus(job_id, all_parts, sources, intention, q, log):
 
         skipped = len(all_parts) - len(selected)
         log(f"Selected top {len(selected)} sources ({budget_used:,} chars) — {skipped} lower-relevance excluded", "info")
+        narrate(f"Haiku finished. Re-ranked all summaries by relevance to your intention — selected the top {len(selected)} ({budget_used:,} chars){f', dropped {skipped} lower-relevance pieces' if skipped else ''}. Handing off to Claude Opus now.")
 
         batches = _make_batches([{**p, "content": p["summary"]} for p in selected])
 
@@ -407,6 +423,9 @@ def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, clien
     """Phase 6: Opus builds skill from ranked summaries."""
     from generate_skill import SYSTEM_PROMPT, build_user_message, read_knowledge_base
 
+    def narrate(msg):
+        q.put({"type": "narrate", "message": msg})
+
     source_title = "Combined: " + ", ".join(p["title"][:20] for p in selected[:3])
     source_url   = sources[0] if sources else ""
     n_batches    = len(batches)
@@ -419,6 +438,7 @@ def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, clien
     if n_batches > 1:
         est_secs = n_batches * 45 + 30
         q.put({"type": "batch_total", "count": n_batches, "estimated_secs": est_secs})
+        narrate(f"Claude Opus 4.6 is generating your skill in {n_batches} batches (~{round(est_secs/60)} min). Each batch produces a partial skill file — I'll merge them into one at the end. Drafts are saved after each batch so nothing is lost if the connection drops.")
 
     partial_skills = []
 
@@ -474,6 +494,8 @@ def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, clien
                        "skill_name": result.get("skill_name", "Draft"),
                        "message": f"Batch {i}/{n_batches} saved ✓"})
                 log(f"Batch {i}/{n_batches} complete ✓", "success")
+                if i < n_batches:
+                    narrate(f"Batch {i} done — draft saved. {n_batches - i} batch{'es' if n_batches - i != 1 else ''} to go.")
             else:
                 log(f"Batch {i}/{n_batches} failed after retry — skipping", "error")
 
@@ -492,6 +514,7 @@ def _run_opus_phase(job_id, selected, batches, sources, intention, q, log, clien
     if len(partial_skills) == 1:
         skill_result = partial_skills[0]
     else:
+        narrate(f"All {len(partial_skills)} batches complete — merging into a single coherent skill file now.")
         log(f"Merging {len(partial_skills)} batches into final skill...", "info")
         MERGE_PROMPT = """\
 Merge these partial Claude Code skill files into one final coherent skill.

@@ -479,6 +479,12 @@
         </div>
       </div>
 
+      <!-- Narrator card -->
+      <div id="narrator-card" style="display:none;background:var(--elevated);border:1px solid var(--border);border-left:3px solid var(--brand-500);border-radius:10px;padding:10px 14px;margin-bottom:10px;">
+        <div style="font-size:11px;font-weight:600;color:var(--brand-300);letter-spacing:0.05em;margin-bottom:4px;">WHAT'S HAPPENING</div>
+        <div id="narrator-text" style="font-size:13px;color:var(--text);line-height:1.55;"></div>
+      </div>
+
       <!-- Current action -->
       <div id="inline-current" style="display:flex;align-items:center;gap:10px;margin-bottom:10px;min-height:22px;">
         <div class="spinner" id="inline-spinner" style="width:14px;height:14px;border-width:2px;"></div>
@@ -1363,6 +1369,8 @@ async function startBuild() {
   document.getElementById('inline-log').innerHTML              = '';
   document.getElementById('inline-bars').innerHTML             = '';
   document.getElementById('inline-current-text').textContent   = currentMode === 'persona' ? 'Building persona...' : 'Fetching sources...';
+  document.getElementById('narrator-card').style.display       = 'none';
+  document.getElementById('narrator-text').textContent         = '';
   resetOverallBar();
   document.getElementById('inline-progress').style.display     = 'block';
   document.getElementById('inline-spinner').style.display      = 'inline-block';
@@ -1418,8 +1426,24 @@ function resetBuildUI() {
   document.getElementById('inline-spinner').style.display = 'none';
 }
 
+function showNarration(text) {
+  const card = document.getElementById('narrator-card');
+  const el   = document.getElementById('narrator-text');
+  if (!card || !el) return;
+  // Fade previous narration into the log as a subtle entry
+  if (el.textContent && el.textContent !== text) {
+    addLog('↳ ' + el.textContent, 'narrate-done');
+  }
+  el.textContent = text;
+  card.style.display = 'block';
+  // Brief highlight flash
+  card.style.borderLeftColor = 'var(--brand-300)';
+  setTimeout(() => { card.style.borderLeftColor = 'var(--brand-500)'; }, 600);
+}
+
 function handleMsg(msg, jobId, stopFn) {
   if (msg.type === 'ping') return;
+  if (msg.type === 'narrate') { showNarration(msg.message); return; }
   // Ignore per-video fetch progress once summarize phase has started
   if (msg.type === 'total')    { if (!summarizePhaseStarted) setTotal(msg.count, msg.estimated_secs); return; }
   if (msg.type === 'progress') { if (!summarizePhaseStarted) setProgress(msg.current, msg.total); return; }
@@ -1547,6 +1571,19 @@ function addLog(message, kind) {
   const current = document.getElementById('inline-current-text');
   // Messages that are connection/meta noise — don't show in inline view at all
   const isMeta = /Connection dropped|reconnecting|polling mode|still running/i.test(message);
+
+  // narrate-done entries go straight into inline log as dimmed italic lines, skip current-text flow
+  if (kind === 'narrate-done') {
+    const inlineLog = document.getElementById('inline-log');
+    if (inlineLog) {
+      const el = document.createElement('div');
+      el.style.cssText = 'font-size:11.5px;color:var(--text-3);font-style:italic;padding:2px 0 2px 14px;line-height:1.5;border-left:2px solid var(--border);margin:3px 0;';
+      el.textContent = message;
+      inlineLog.appendChild(el);
+      inlineLog.scrollTop = inlineLog.scrollHeight;
+    }
+    return;
+  }
 
   const inlineLog = document.getElementById('inline-log');
   if (current && inlineLog && !isMeta) {
