@@ -1815,11 +1815,15 @@ async function confirmBuild() {
     return;
   }
   card.style.display = 'none';
+  document.getElementById('inline-log').innerHTML = '';
+  document.getElementById('inline-bars').innerHTML = '';
+  document.getElementById('inline-progress').style.display = 'block';
   document.getElementById('inline-spinner').style.display = 'inline-block';
   document.getElementById('inline-current-text').textContent = 'Summarizing sources with Haiku...';
   document.getElementById('inline-current-text').style.color = 'var(--text)';
   document.getElementById('build-btn').disabled = true;
   document.getElementById('stop-btn').style.display = 'inline-flex';
+  startTimer();
   startPolling(jobId, startFrom);
 }
 
