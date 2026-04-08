@@ -323,6 +323,22 @@ def run_build(job_id, sources, max_videos, raw_text, intention=""):
             jobs[job_id]["status"] = "awaiting_confirmation"
             jobs[job_id]["pending_parts"] = all_parts
             jobs[job_id]["pending_source_url"] = sources[0] if sources else ""
+            # Persist pending state to disk so a dyno restart doesn't lose it
+            try:
+                pending_dir = DRAFTS_DIR / job_id
+                pending_dir.mkdir(parents=True, exist_ok=True)
+                pending_data = {
+                    "job_id": job_id,
+                    "sources": sources,
+                    "intention": intention,
+                    "all_parts": all_parts,
+                    "log_buffer": [],  # fresh — will replay from buffer on resume
+                }
+                (pending_dir / "pending.json").write_text(
+                    json.dumps(pending_data, ensure_ascii=False)
+                )
+            except Exception:
+                pass  # best-effort
             return  # Frontend must POST /confirm/<job_id> to continue
 
         # Under $1 — proceed automatically
@@ -1121,8 +1137,30 @@ def cancel(job_id):
 def confirm_build(job_id):
     """Resume an awaiting_confirmation job after user approves the cost estimate."""
     job = jobs.get(job_id)
+
+    # If dyno restarted and wiped memory, try to recover from disk
     if not job:
-        return jsonify({"error": "Job not found"}), 404
+        pending_path = DRAFTS_DIR / job_id / "pending.json"
+        if pending_path.exists():
+            try:
+                pending_data = json.loads(pending_path.read_text())
+                _buf = []
+                q = _BufQueue(_buf)
+                job = {
+                    "status": "awaiting_confirmation",
+                    "queue": q,
+                    "log_buffer": _buf,
+                    "result": None,
+                    "sources": pending_data.get("sources", []),
+                    "intention": pending_data.get("intention", ""),
+                    "pending_parts": pending_data.get("all_parts", []),
+                }
+                jobs[job_id] = job
+            except Exception as e:
+                return jsonify({"error": f"Job expired and recovery failed: {e}"}), 404
+        else:
+            return jsonify({"error": "Job not found"}), 404
+
     if job.get("status") != "awaiting_confirmation":
         return jsonify({"error": "Job is not awaiting confirmation"}), 400
 
@@ -1131,6 +1169,11 @@ def confirm_build(job_id):
         # Already confirmed — guard against double-click / double-reload
         return jsonify({"error": "Already confirmed or no pending content"}), 400
     job.pop("pending_parts")
+    # Clean up the pending file now that we've confirmed
+    try:
+        (DRAFTS_DIR / job_id / "pending.json").unlink(missing_ok=True)
+    except Exception:
+        pass
     sources   = job.get("sources", [])
     intention = job.get("intention", "")
     q         = job["queue"]
